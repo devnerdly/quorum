@@ -38,6 +38,8 @@ def main() -> None:
     # Import collectors after DB is initialised (avoids import-time DB calls)
     from collectors.yahoo import collect_and_store as yf_collect
     from collectors.alpha_vantage import collect_and_store as av_collect
+    from collectors.shipping import collect_and_store as shipping_collect
+    from collectors.portwatch import collect_and_store as portwatch_collect
 
     scheduler = BlockingScheduler(timezone="UTC")
 
@@ -87,6 +89,31 @@ def main() -> None:
         args=[av_collect, "5min"],
         id="av_5min",
         name="Alpha Vantage 5-minute OHLCV",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # --- Shipping / AIS jobs ---
+    # Tanker positions: every 6 hours
+    scheduler.add_job(
+        safe_run,
+        "interval",
+        hours=6,
+        args=[shipping_collect],
+        id="shipping_ais",
+        name="Datalastic AIS tanker positions",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Port congestion: every 24 hours
+    scheduler.add_job(
+        safe_run,
+        "interval",
+        hours=24,
+        args=[portwatch_collect],
+        id="portwatch_congestion",
+        name="IMF PortWatch port congestion",
         max_instances=1,
         coalesce=True,
     )
