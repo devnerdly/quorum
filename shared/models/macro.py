@@ -13,8 +13,9 @@ class MacroEIA(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    report_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Crude oil inventories (thousand barrels)
-    crude_inventory: Mapped[float | None] = mapped_column(Float, nullable=True)
+    crude_inventory_total: Mapped[float | None] = mapped_column(Float, nullable=True)
     crude_inventory_change: Mapped[float | None] = mapped_column(Float, nullable=True)
     # SPR
     spr_inventory: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -36,6 +37,7 @@ class MacroCOT(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    report_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Commercial (hedgers)
     commercial_long: Mapped[float | None] = mapped_column(Float, nullable=True)
     commercial_short: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -77,8 +79,9 @@ class MacroOPEC(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    report_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Production (million barrels per day)
-    production: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_production: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Demand forecasts
     demand_forecast: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Supply forecasts (non-OPEC)

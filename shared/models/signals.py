@@ -39,8 +39,9 @@ class AIRecommendation(Base):
     action: Mapped[str] = mapped_column(String(8), nullable=False)
     # Full analysis narrative
     analysis_text: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # JSON-encoded scenario list
-    scenarios: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Scenario narratives
+    base_scenario: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_scenario: Mapped[str | None] = mapped_column(Text, nullable=True)
     # JSON-encoded risk factor list
     risk_factors: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Entry / stop-loss / take-profit prices
