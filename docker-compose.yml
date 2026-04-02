@@ -25,5 +25,17 @@ services:
       timeout: 5s
       retries: 5
 
+  sentiment:
+    build:
+      context: .
+      dockerfile: services/sentiment/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    restart: unless-stopped
+
 volumes:
   postgres_data:

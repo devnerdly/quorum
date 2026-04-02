@@ -1,0 +1,6 @@
+apscheduler>=3.10
+feedparser>=6.0
+anthropic>=0.40
+openai>=1.50
+requests>=2.31
+shared @ file:///app/shared

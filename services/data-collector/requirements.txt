@@ -1,0 +1,4 @@
+apscheduler>=3.10
+yfinance>=0.2
+requests>=2.31
+shared @ file:///app/shared

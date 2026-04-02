@@ -1,0 +1,111 @@
+"""Yahoo Finance collector for Brent crude oil (BZ=F) OHLCV data."""
+
+from __future__ import annotations
+
+import logging
+from datetime import timezone
+
+import yfinance as yf
+
+from shared.models.base import SessionLocal
+from shared.models.ohlcv import OHLCV
+from shared.redis_streams import publish
+from shared.schemas.events import PriceEvent
+
+logger = logging.getLogger(__name__)
+
+# Maps yfinance interval strings to internal timeframe labels
+INTERVAL_MAP: dict[str, str] = {
+    "1m": "1min",
+    "5m": "5min",
+    "1h": "1H",
+    "1d": "1D",
+    "1wk": "1W",
+}
+
+_TICKER = "BZ=F"
+_STREAM = "prices.brent"
+
+
+def fetch_brent_ohlcv(interval: str = "1h", period: str = "1d") -> list[dict]:
+    """Download BZ=F OHLCV bars from Yahoo Finance.
+
+    Args:
+        interval: yfinance interval string (e.g. "1m", "1h", "1d").
+        period: yfinance period string (e.g. "1d", "5d", "1mo").
+
+    Returns:
+        List of dicts with keys: timestamp, source, timeframe, open, high,
+        low, close, volume.
+    """
+    timeframe = INTERVAL_MAP.get(interval, interval)
+    df = yf.download(
+        _TICKER,
+        interval=interval,
+        period=period,
+        progress=False,
+        auto_adjust=True,
+    )
+
+    if df.empty:
+        logger.warning("yfinance returned empty DataFrame for interval=%s period=%s", interval, period)
+        return []
+
+    # yfinance may return a MultiIndex when downloading a single ticker with
+    # auto_adjust=True in newer versions — flatten if needed.
+    if hasattr(df.columns, "levels"):
+        df.columns = df.columns.get_level_values(0)
+
+    records: list[dict] = []
+    for ts, row in df.iterrows():
+        # Ensure timezone-aware UTC timestamp
+        if hasattr(ts, "tzinfo") and ts.tzinfo is not None:
+            aware_ts = ts.to_pydatetime()
+        else:
+            aware_ts = ts.to_pydatetime().replace(tzinfo=timezone.utc)
+
+        records.append(
+            {
+                "timestamp": aware_ts,
+                "source": "yahoo",
+                "timeframe": timeframe,
+                "open": float(row["Open"]),
+                "high": float(row["High"]),
+                "low": float(row["Low"]),
+                "close": float(row["Close"]),
+                "volume": float(row["Volume"]) if "Volume" in row and row["Volume"] is not None else None,
+            }
+        )
+
+    logger.info("Fetched %d bars from Yahoo Finance (interval=%s)", len(records), interval)
+    return records
+
+
+def collect_and_store(interval: str = "1h", period: str = "1d") -> None:
+    """Fetch OHLCV data, persist to DB, and publish to Redis stream."""
+    records = fetch_brent_ohlcv(interval=interval, period=period)
+    if not records:
+        return
+
+    with SessionLocal() as session:
+        for rec in records:
+            row = OHLCV(
+                timestamp=rec["timestamp"],
+                source=rec["source"],
+                timeframe=rec["timeframe"],
+                open=rec["open"],
+                high=rec["high"],
+                low=rec["low"],
+                close=rec["close"],
+                volume=rec["volume"],
+            )
+            session.add(row)
+        session.commit()
+
+    logger.info("Stored %d OHLCV rows (interval=%s)", len(records), interval)
+
+    # Publish the most recent bar as a PriceEvent
+    latest = records[-1]
+    event = PriceEvent(**latest)
+    publish(_STREAM, event.model_dump())
+    logger.info("Published PriceEvent to stream '%s' (interval=%s)", _STREAM, interval)
