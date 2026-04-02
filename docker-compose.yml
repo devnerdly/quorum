@@ -49,5 +49,15 @@ services:
     env_file: .env
     restart: unless-stopped
 
+  notifier:
+    build:
+      context: .
+      dockerfile: services/notifier/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    restart: unless-stopped
+
 volumes:
   postgres_data:
