@@ -15,6 +15,8 @@ import plugin_campaign_mgmt as _plugin_campaign_mgmt
 import plugin_analytics as _plugin_analytics
 import plugin_alerts as _plugin_alerts
 import plugin_web as _plugin_web
+import plugin_deep_dive as _plugin_deep_dive
+import plugin_live_watch as _plugin_live_watch
 
 # Merge all plugin tools into the tools list sent to Opus
 _PLUGINS = [
@@ -22,6 +24,8 @@ _PLUGINS = [
     _plugin_analytics,
     _plugin_alerts,
     _plugin_web,
+    _plugin_deep_dive,
+    _plugin_live_watch,
 ]
 for _p in _PLUGINS:
     TOOLS = TOOLS + _p.PLUGIN_TOOLS
