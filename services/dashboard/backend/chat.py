@@ -17,6 +17,7 @@ import plugin_alerts as _plugin_alerts
 import plugin_web as _plugin_web
 import plugin_deep_dive as _plugin_deep_dive
 import plugin_live_watch as _plugin_live_watch
+import plugin_committee as _plugin_committee
 
 # Merge all plugin tools into the tools list sent to Opus
 _PLUGINS = [
@@ -26,6 +27,7 @@ _PLUGINS = [
     _plugin_web,
     _plugin_deep_dive,
     _plugin_live_watch,
+    _plugin_committee,
 ]
 for _p in _PLUGINS:
     TOOLS = TOOLS + _p.PLUGIN_TOOLS
@@ -46,6 +48,14 @@ leverage, scaling in via DCA layers ($3k → $6k → $10k → $20k → $30k → 
 - `close_campaign(campaign_id, reason)` — close ALL DCA layers in a campaign at market
 - `add_dca_layer(campaign_id, reason)` — scale into an existing campaign (next layer)
 - `open_new_campaign(side, reason)` — open a new LONG/SHORT campaign (only one at a time)
+
+## DEBATE MODE — when scores are conflicted
+When the user asks for a debate, second opinion, "bull vs bear", "let them argue",
+"what does the other side say", OR when you notice scores are ambivalent (unified
+within ±20 with conflicting components), call `committee_debate`. It spawns a Bull
+agent and a Bear agent that independently build the strongest case for each side,
+then a Judge renders a final verdict. Use its output to explain BOTH sides to the
+user, not just the winner.
 
 When the user says "close my short", "exit", "zamknij" → CALL close_campaign immediately.
 When the user says "add", "scale in", "more" → CALL add_dca_layer.
