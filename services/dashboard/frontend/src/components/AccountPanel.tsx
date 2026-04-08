@@ -181,8 +181,8 @@ const AccountPanel: React.FC = () => {
         <span className="text-[10px] text-gray-500">active</span>
       </Card>
 
-      {/* Account Drawdown — distance to -50% account hard stop */}
-      <Card label="Drawdown">
+      {/* Equity delta — drawdown when negative, P&L from start when positive */}
+      <Card label={ddPct >= 0 ? "Equity Δ" : "Drawdown"}>
         <span className={`text-base font-semibold ${pnlColor(ddPct)}`}>
           {ddPct >= 0 ? "+" : ""}
           {ddPct.toFixed(2)}%
@@ -194,7 +194,9 @@ const AccountPanel: React.FC = () => {
           />
         </div>
         <span className="text-[10px] text-gray-500">
-          {Math.abs(ddPct).toFixed(2)}% / {hardStopPct.toFixed(0)}% hard stop
+          {ddPct >= 0
+            ? `${hardStopPct.toFixed(0)}% hard stop far away`
+            : `${Math.abs(ddPct).toFixed(2)}% / ${hardStopPct.toFixed(0)}% hard stop`}
         </span>
       </Card>
     </div>

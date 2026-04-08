@@ -117,6 +117,22 @@ def run_analysis(force: bool = False) -> None:
         _last_cycle_ts = now_ts
         return
 
+    # Technical score race-condition guard: if technical is None BUT other
+    # scores work, this is likely a startup race where the data-collector
+    # hasn't finished warming up the OHLCV tables yet. Don't lock in the
+    # throttle — retry on the next price event instead of waiting 15 min.
+    if technical is None and any(v is not None for v in [fundamental, sentiment, shipping]):
+        logger.warning(
+            "Technical score is None but other scores present — "
+            "likely startup race. Publishing but NOT updating throttle "
+            "so we retry on next price event."
+        )
+        # Fall through to publish (with technical=None) but skip the
+        # _last_cycle_ts update below by returning early after publish.
+        _race_condition_skip_throttle = True
+    else:
+        _race_condition_skip_throttle = False
+
     logger.info(
         "Scores — technical=%s fundamental=%s sentiment=%s "
         "(news=%s knowledge=%s) shipping=%s unified=%s",
@@ -150,9 +166,13 @@ def run_analysis(force: bool = False) -> None:
     try:
         publish(STREAM_OUT, event.model_dump())
         logger.info("Published ScoresEvent to %s", STREAM_OUT)
-        _last_cycle_ts = now_ts
-        with _pending_lock:
-            _pending_cycle = False
+        # Only advance the throttle clock if we got a full reading.
+        # During the startup race (technical=None but others OK), leave
+        # the clock alone so the next price event triggers another run.
+        if not _race_condition_skip_throttle:
+            _last_cycle_ts = now_ts
+            with _pending_lock:
+                _pending_cycle = False
     except Exception:
         logger.exception("Failed to publish scores to Redis")
 

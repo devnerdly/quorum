@@ -23,6 +23,8 @@ export interface PositionOverlay {
   entry_price: number;
   stop_loss: number | null;
   take_profit: number | null;
+  campaign_id?: number | null;
+  layer_index?: number | null;
 }
 
 export interface SignalOverlay {
@@ -135,15 +137,21 @@ const PriceChart: React.FC<PriceChartProps> = ({
     });
     priceLineRefs.current = [];
 
-    // Add new price lines for each position
+    // Add new price lines for each position. We label by campaign layer
+    // (e.g. "C#2 L1 SHORT") rather than the internal position id, which is
+    // meaningless to the trader.
     positions.forEach((pos) => {
+      const layerLabel = pos.layer_index != null ? `L${pos.layer_index + 1}` : "L?";
+      const campLabel = pos.campaign_id != null ? `C#${pos.campaign_id}` : "";
+      const prefix = [campLabel, layerLabel].filter(Boolean).join(" ");
+
       const entryLine = series.createPriceLine({
         price: pos.entry_price,
         color: "#3B82F6",
         lineWidth: 1,
         lineStyle: 2, // dashed
         axisLabelVisible: true,
-        title: `#${pos.id} Entry (${pos.side})`,
+        title: `${prefix} ${pos.side}`.trim(),
       });
       priceLineRefs.current.push(entryLine);
 
@@ -154,7 +162,7 @@ const PriceChart: React.FC<PriceChartProps> = ({
           lineWidth: 1,
           lineStyle: 2,
           axisLabelVisible: true,
-          title: `#${pos.id} SL`,
+          title: `${prefix} SL`.trim(),
         });
         priceLineRefs.current.push(slLine);
       }
@@ -166,7 +174,7 @@ const PriceChart: React.FC<PriceChartProps> = ({
           lineWidth: 1,
           lineStyle: 2,
           axisLabelVisible: true,
-          title: `#${pos.id} TP`,
+          title: `${prefix} TP`.trim(),
         });
         priceLineRefs.current.push(tpLine);
       }
