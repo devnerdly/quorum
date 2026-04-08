@@ -1,4 +1,5 @@
 from shared.models.base import Base, SessionLocal, engine
+from shared.models.alerts import Alert
 from shared.models.ohlcv import OHLCV
 from shared.models.macro import MacroEIA, MacroCOT, MacroFRED, MacroJODI, MacroOPEC
 from shared.models.sentiment import SentimentNews, SentimentTwitter
@@ -8,11 +9,13 @@ from shared.models.positions import Position
 from shared.models.knowledge import KnowledgeSummary
 from shared.models.account import Account
 from shared.models.campaigns import Campaign
+from shared.models.facts import Fact
 
 __all__ = [
     "Base",
     "SessionLocal",
     "engine",
+    "Alert",
     "OHLCV",
     "MacroEIA",
     "MacroCOT",
@@ -29,4 +32,5 @@ __all__ = [
     "KnowledgeSummary",
     "Account",
     "Campaign",
+    "Fact",
 ]

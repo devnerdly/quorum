@@ -199,3 +199,43 @@ def format_position_event(evt: dict) -> str | None:
         lines += ["", f"_at {ts}_"]
 
     return "\n".join(lines)
+
+
+_ALERT_KIND_ICONS = {
+    "price":   "\U0001f514",  # bell
+    "keyword": "\U0001f4f0",  # newspaper
+    "score":   "\U0001f4ca",  # bar chart
+}
+
+
+def format_alert_triggered(evt: dict) -> str | None:
+    """Format an alert.triggered event into a Telegram message."""
+    if str(evt.get("type", "")) != "alert_triggered":
+        return None
+
+    kind = str(evt.get("kind", "")).lower()
+    icon = _ALERT_KIND_ICONS.get(kind, "\U0001f6a8")
+    alert_id = evt.get("alert_id")
+    triggered_value = evt.get("triggered_value")
+    match_info = evt.get("match_info")
+    message = evt.get("message") or ""
+
+    lines = [
+        f"{icon} *Alert #{alert_id} triggered* ({kind})",
+    ]
+
+    if kind == "price" and triggered_value is not None:
+        lines.append(f"Brent price: *${triggered_value:.2f}*")
+    elif kind == "score" and triggered_value is not None:
+        lines.append(f"Score value: *{triggered_value:+.1f}*")
+    elif kind == "keyword" and match_info:
+        lines.append(f"_{match_info[:300]}_")
+
+    if message:
+        lines += ["", message]
+
+    ts = evt.get("timestamp")
+    if ts:
+        lines += ["", f"_at {ts}_"]
+
+    return "\n".join(lines)

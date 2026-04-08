@@ -11,6 +11,20 @@ from anthropic import Anthropic
 from shared.config import settings
 from shared.redis_streams import get_redis
 from chat_tools import TOOLS, execute_tool
+import plugin_campaign_mgmt as _plugin_campaign_mgmt
+import plugin_analytics as _plugin_analytics
+import plugin_alerts as _plugin_alerts
+import plugin_web as _plugin_web
+
+# Merge all plugin tools into the tools list sent to Opus
+_PLUGINS = [
+    _plugin_campaign_mgmt,
+    _plugin_analytics,
+    _plugin_alerts,
+    _plugin_web,
+]
+for _p in _PLUGINS:
+    TOOLS = TOOLS + _p.PLUGIN_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +158,14 @@ def stream_chat(message: str, session_id: str = "default") -> Generator[str, Non
         tool_results: list[dict] = []
         for tc in tool_calls:
             try:
-                result = execute_tool(tc["name"], tc["input"])
+                # Try each plugin in order; fall back to core tools
+                result = None
+                for _p in _PLUGINS:
+                    result = _p.execute(tc["name"], tc["input"])
+                    if result is not None:
+                        break
+                if result is None:
+                    result = execute_tool(tc["name"], tc["input"])
                 yield (
                     f"event: tool_result\ndata: "
                     f"{json.dumps({'name': tc['name'], 'output': result}, default=str)}\n\n"

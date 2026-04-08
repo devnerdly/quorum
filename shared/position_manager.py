@@ -519,34 +519,177 @@ def close_campaign(campaign_id: int, status: str, notes: str | None = None) -> d
 # ---------------------------------------------------------------------------
 
 def check_tp_sl_hits() -> list[dict]:
-    """Scan open campaigns and enforce the hard-stop drawdown rule.
+    """Scan open campaigns and enforce the hard-stop drawdown rule and campaign-level TP.
 
     For each open campaign:
+      - If campaign.take_profit is set and price crosses it → close_campaign(status='closed_tp')
       - Compute unrealised PnL % vs total margin
-      - If pnl_pct <= -HARD_STOP_DRAWDOWN_PCT → close_campaign(status='closed_hard_stop')
+      - If pnl_pct <= -max_loss_pct → close_campaign(status='closed_hard_stop')
 
     Returns the list of newly-closed campaign snapshots.
     """
+    bar = get_current_bar()
     current_price = get_current_price()
     if current_price is None:
         return []
 
+    high = bar[0] if bar else current_price
+    low = bar[1] if bar else current_price
+
     closed: list[dict] = []
 
-    open_campaigns = list_open_campaigns()
-    for camp in open_campaigns:
+    with SessionLocal() as session:
+        open_camps = (
+            session.query(Campaign)
+            .filter(Campaign.status == "open")
+            .all()
+        )
+        camp_rows = [(c.id, c.side, c.take_profit, c.max_loss_pct) for c in open_camps]
+
+    for camp_id, side, camp_tp, camp_max_loss in camp_rows:
+        # 1) Campaign-level take-profit check
+        if camp_tp is not None:
+            tp_hit = (side == "LONG" and high >= camp_tp) or (
+                side == "SHORT" and low <= camp_tp
+            )
+            if tp_hit:
+                logger.info(
+                    "Campaign #%s TP triggered: take_profit=%.2f (high=%.2f low=%.2f)",
+                    camp_id, camp_tp, high, low,
+                )
+                snap = close_campaign(
+                    camp_id,
+                    status="closed_tp",
+                    notes=f"Campaign TP hit: price reached {camp_tp:.2f}",
+                )
+                if snap:
+                    closed.append(snap)
+                continue  # already closed, skip hard-stop check
+
+        # 2) Hard-stop drawdown check
+        camp = compute_campaign_state(camp_id, current_price)
+        if camp is None:
+            continue
         pnl_pct = camp.get("unrealised_pnl_pct") or 0.0
-        if pnl_pct <= -HARD_STOP_DRAWDOWN_PCT:
+        threshold = camp_max_loss if camp_max_loss else HARD_STOP_DRAWDOWN_PCT
+        if pnl_pct <= -threshold:
             logger.warning(
-                "Campaign #%s hard stop triggered: pnl_pct=%.2f%%",
-                camp["id"], pnl_pct,
+                "Campaign #%s hard stop triggered: pnl_pct=%.2f%% threshold=%.2f%%",
+                camp_id, pnl_pct, threshold,
             )
             snap = close_campaign(
-                camp["id"],
+                camp_id,
                 status="closed_hard_stop",
-                notes=f"Hard stop: drawdown {pnl_pct:.2f}% exceeded -{HARD_STOP_DRAWDOWN_PCT}%",
+                notes=f"Hard stop: drawdown {pnl_pct:.2f}% exceeded -{threshold}%",
             )
             if snap:
                 closed.append(snap)
 
     return closed
+
+
+# ---------------------------------------------------------------------------
+# Campaign management helpers (used by plugin_campaign_mgmt)
+# ---------------------------------------------------------------------------
+
+def partial_close_campaign(
+    campaign_id: int,
+    pct: float,
+    current_price: float,
+    reason: str,
+) -> dict:
+    """Close a fraction of a campaign's open layers (oldest first).
+
+    Closes whole layers until cumulative closed_lots >= target_lots_to_close.
+    Returns {closed_count, closed_lots, realized_pnl, remaining_lots}.
+    """
+    if not (0 < pct <= 100):
+        return {"error": "pct must be between 0 and 100 (exclusive lower)"}
+
+    with SessionLocal() as session:
+        campaign = session.query(Campaign).filter(Campaign.id == campaign_id).first()
+        if campaign is None:
+            return {"error": f"campaign {campaign_id} not found"}
+        if campaign.status != "open":
+            return {"error": f"campaign {campaign_id} is not open (status={campaign.status})"}
+
+        open_pos = (
+            session.query(Position)
+            .filter(Position.campaign_id == campaign_id, Position.status == "open")
+            .order_by(Position.opened_at)
+            .all()
+        )
+        if not open_pos:
+            return {"error": f"campaign {campaign_id} has no open positions"}
+
+        total_open_lots = sum(p.lots or 0.0 for p in open_pos)
+        target_lots = total_open_lots * pct / 100.0
+        pos_ids_to_close: list[int] = []
+        accumulated = 0.0
+
+        for p in open_pos:
+            if accumulated >= target_lots:
+                break
+            pos_ids_to_close.append(p.id)
+            accumulated += p.lots or 0.0
+
+    # Close the selected positions outside the session
+    closed_count = 0
+    closed_lots = 0.0
+    realized_pnl = 0.0
+
+    for pos_id in pos_ids_to_close:
+        snap = close_position(
+            pos_id,
+            close_price=current_price,
+            status="closed_manual",
+            notes=f"Partial close ({pct:.1f}%): {reason}",
+        )
+        if snap:
+            closed_count += 1
+            closed_lots += snap.get("lots") or 0.0
+            realized_pnl += snap.get("realised_pnl") or 0.0
+
+    remaining_lots = total_open_lots - closed_lots
+
+    logger.info(
+        "partial_close_campaign #%s: closed %d layers, lots=%.4f, pnl=%.2f, remaining=%.4f",
+        campaign_id, closed_count, closed_lots, realized_pnl, remaining_lots,
+    )
+    return {
+        "campaign_id": campaign_id,
+        "closed_count": closed_count,
+        "closed_lots": round(closed_lots, 5),
+        "realized_pnl": round(realized_pnl, 2),
+        "remaining_lots": round(remaining_lots, 5),
+        "close_price": current_price,
+        "reason": reason,
+    }
+
+
+def update_campaign_limits(campaign_id: int, max_loss_pct: float) -> dict:
+    """Update the max_loss_pct hard-stop threshold for an open campaign."""
+    if not (1 <= max_loss_pct <= 90):
+        return {"error": "max_loss_pct must be between 1 and 90"}
+
+    with SessionLocal() as session:
+        campaign = session.query(Campaign).filter(Campaign.id == campaign_id).first()
+        if campaign is None:
+            return {"error": f"campaign {campaign_id} not found"}
+        if campaign.status != "open":
+            return {"error": f"campaign {campaign_id} is not open (status={campaign.status})"}
+
+        old_val = campaign.max_loss_pct
+        campaign.max_loss_pct = max_loss_pct
+        session.commit()
+
+    logger.info(
+        "update_campaign_limits #%s: max_loss_pct %.1f → %.1f",
+        campaign_id, old_val, max_loss_pct,
+    )
+    return {
+        "campaign_id": campaign_id,
+        "old_max_loss_pct": old_val,
+        "new_max_loss_pct": max_loss_pct,
+        "updated": True,
+    }

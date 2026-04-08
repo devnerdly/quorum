@@ -165,6 +165,14 @@ def main() -> None:
     watchdog_thread.start()
     logger.info("Watchdog thread started (checks every 30s for deferred cycles)")
 
+    # Start background alerts evaluator
+    from alerts_evaluator import run_evaluator_loop
+    alerts_thread = threading.Thread(
+        target=run_evaluator_loop, daemon=True, name="alerts-evaluator"
+    )
+    alerts_thread.start()
+    logger.info("Alerts evaluator thread started")
+
     # Run an initial analysis cycle on startup
     try:
         run_analysis()

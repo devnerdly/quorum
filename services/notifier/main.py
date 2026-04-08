@@ -28,6 +28,7 @@ from shared.config import settings
 from shared.redis_streams import subscribe
 
 from formatter import (
+    format_alert_triggered,
     format_marketfeed_digest,
     format_position_event,
     format_signal_alert,
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 STREAM_SIGNAL = "signal.recommendation"
 STREAM_POSITION = "position.event"
 STREAM_KNOWLEDGE = "knowledge.summary"
+STREAM_ALERT = "alert.triggered"
 GROUP = "notifier"
 
 # Telegram message size hard cap is 4096 chars; leave headroom for markdown.
@@ -317,6 +319,7 @@ async def main_async() -> None:
             _consume_stream(STREAM_SIGNAL, "notifier-signal", format_signal_alert, bot),
             _consume_stream(STREAM_POSITION, "notifier-position", format_position_event, bot),
             _consume_stream(STREAM_KNOWLEDGE, "notifier-knowledge", format_marketfeed_digest, bot),
+            _consume_stream(STREAM_ALERT, "notifier-alerts", format_alert_triggered, bot),
         )
     finally:
         await application.updater.stop()

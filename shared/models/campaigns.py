@@ -33,5 +33,8 @@ class Campaign(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", index=True)
 
     max_loss_pct: Mapped[float] = mapped_column(Float, nullable=False, default=50.0)
+    # Campaign-level take-profit price. When set and price crosses it, the entire campaign
+    # is auto-closed with status=closed_tp. ALTER TABLE campaigns ADD COLUMN take_profit FLOAT;
+    take_profit: Mapped[float | None] = mapped_column(Float, nullable=True)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # set on close
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
