@@ -129,12 +129,12 @@ def parse_opus_response(text: str) -> dict:
 
 
 def _get_current_price() -> float | None:
-    """Return the most recent WTI close (Yahoo CL=F)."""
+    """Return the most recent WTI close (Binance CLUSDT)."""
     try:
         with SessionLocal() as session:
             row = (
                 session.query(OHLCV)
-                .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+                .filter(OHLCV.timeframe == "1min", OHLCV.source == "binance")
                 .order_by(OHLCV.timestamp.desc())
                 .first()
             )
@@ -154,14 +154,14 @@ def _get_current_price() -> float | None:
 def get_market_snapshot() -> dict:
     """Return current market snapshot: latest price + recent OHLCV stats.
 
-    Uses Yahoo CL=F (NYMEX WTI front-month) — real front-month future that
+    Uses Binance CLUSDT (NYMEX WTI front-month) — real front-month future that
     matches XTB OIL.WTI CFD virtually 1:1.
     """
     try:
         with SessionLocal() as session:
             latest = (
                 session.query(OHLCV)
-                .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+                .filter(OHLCV.timeframe == "1min", OHLCV.source == "binance")
                 .order_by(OHLCV.timestamp.desc())
                 .first()
             )

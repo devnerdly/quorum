@@ -1,4 +1,5 @@
 apscheduler>=3.10
 yfinance>=0.2
 requests>=2.31
+websocket-client>=1.7
 shared @ file:///app/shared

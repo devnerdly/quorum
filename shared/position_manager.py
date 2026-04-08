@@ -33,11 +33,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def get_current_price() -> float | None:
-    """Return the most recent WTI close (Yahoo CL=F)."""
+    """Return the most recent WTI close (Binance CLUSDT)."""
     with SessionLocal() as session:
         row = (
             session.query(OHLCV)
-            .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == "1min", OHLCV.source == "binance")
             .order_by(OHLCV.timestamp.desc())
             .first()
         )
@@ -56,7 +56,7 @@ def get_current_bar() -> tuple[float, float, float] | None:
     with SessionLocal() as session:
         row = (
             session.query(OHLCV)
-            .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == "1min", OHLCV.source == "binance")
             .order_by(OHLCV.timestamp.desc())
             .first()
         )

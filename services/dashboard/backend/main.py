@@ -195,12 +195,12 @@ def get_ohlcv(
     timeframe: str = Query(default="1H"),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict[str, Any]:
-    """Return OHLCV bars suitable for Lightweight Charts (Yahoo CL=F only)."""
+    """Return OHLCV bars suitable for Lightweight Charts (Binance CLUSDT only)."""
     db = SessionLocal()
     try:
         rows = (
             db.query(OHLCV)
-            .filter(OHLCV.timeframe == timeframe, OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == timeframe, OHLCV.source == "binance")
             .order_by(desc(OHLCV.timestamp))
             .limit(limit)
             .all()

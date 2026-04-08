@@ -16,7 +16,7 @@ TOOLS = [
     {
         "name": "get_current_market_state",
         "description": (
-            "Get the current WTI crude market state: latest price (Yahoo CL=F), "
+            "Get the current WTI crude market state: latest price (Binance CLUSDT), "
             "all 5 sub-scores, top 3 knowledge digests, list of open positions, and the latest "
             "AIRecommendation. Always call this first before answering any 'should I...' question."
         ),
@@ -230,10 +230,10 @@ def _get_current_market_state() -> dict:
     from sqlalchemy import desc
 
     with SessionLocal() as session:
-        # Latest Yahoo CL=F (WTI) price
+        # Latest Binance CLUSDT (WTI) price
         price_row = (
             session.query(OHLCV)
-            .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == "1min", OHLCV.source == "binance")
             .order_by(desc(OHLCV.timestamp))
             .first()
         )
