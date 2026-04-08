@@ -88,6 +88,9 @@ def recompute_account_state() -> dict:
                     pnl = (p.entry_price - current_price) * lots * 100
                 total_unrealised += pnl
 
+        # cash is now the authoritative wallet balance (starting + realized).
+        # equity = balance + unrealized. Margin is tracked separately but does
+        # NOT reduce cash (standard broker model, fixed in 2026-04 cleanup).
         equity = cash + total_unrealised
 
         if total_margin_used > 0:
@@ -96,6 +99,14 @@ def recompute_account_state() -> dict:
             margin_level_pct = None  # infinite / no exposure
 
         free_margin = equity - total_margin_used
+
+        # Account-level drawdown from starting_balance (for the -50% hard stop).
+        if starting_balance > 0:
+            account_drawdown_pct = round(
+                ((equity - starting_balance) / starting_balance) * 100, 2
+            )
+        else:
+            account_drawdown_pct = 0.0
 
         return {
             "starting_balance": starting_balance,
@@ -106,13 +117,23 @@ def recompute_account_state() -> dict:
             "margin_level_pct": margin_level_pct,
             "realized_pnl_total": round(realized_pnl_total, 2),
             "unrealised_pnl": round(total_unrealised, 2),
+            "account_drawdown_pct": account_drawdown_pct,
+            "account_hard_stop_pct": -50.0,
             "open_campaigns": len(open_campaign_ids),
             "leverage": leverage,
         }
 
 
 def apply_position_open(margin_used: float) -> None:
-    """Deduct margin from cash when a position is opened."""
+    """No-op on cash when a position is opened.
+
+    Margin on open positions is DERIVED at read time from sum(margin_used)
+    of open positions — it is not booked against cash. This matches standard
+    broker models where the wallet balance stays constant, and margin is
+    shown as "locked" but not deducted. See recompute_account_state().
+
+    The margin_used argument is kept for API stability and logging only.
+    """
     with SessionLocal() as session:
         account = (
             session.execute(
@@ -121,14 +142,20 @@ def apply_position_open(margin_used: float) -> None:
         )
         if account is None:
             account = _create_account_in_session(session)
-        account.cash -= margin_used
         account.updated_at = datetime.now(tz=timezone.utc)
         session.commit()
-        logger.debug("apply_position_open: cash now %.2f (-%s margin)", account.cash, margin_used)
+        logger.debug(
+            "apply_position_open: cash unchanged at %.2f (margin %.2f now locked as derived)",
+            account.cash, margin_used,
+        )
 
 
 def apply_position_close(margin_used: float, realized_pnl: float) -> None:
-    """Return margin to cash and book realized PnL when a position is closed."""
+    """Book realized PnL against cash when a position is closed.
+
+    Cash only changes by realized_pnl — the margin was never deducted on open,
+    so there's nothing to return. See apply_position_open() for rationale.
+    """
     with SessionLocal() as session:
         account = (
             session.execute(
@@ -137,13 +164,13 @@ def apply_position_close(margin_used: float, realized_pnl: float) -> None:
         )
         if account is None:
             account = _create_account_in_session(session)
-        account.cash += margin_used + realized_pnl
+        account.cash += realized_pnl
         account.realized_pnl_total += realized_pnl
         account.updated_at = datetime.now(tz=timezone.utc)
         session.commit()
         logger.debug(
-            "apply_position_close: cash now %.2f (+%.2f margin +%.2f pnl)",
-            account.cash, margin_used, realized_pnl,
+            "apply_position_close: cash now %.2f (+%.2f realized pnl, margin %.2f released)",
+            account.cash, realized_pnl, margin_used,
         )
 
 

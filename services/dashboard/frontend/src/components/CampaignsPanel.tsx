@@ -99,8 +99,8 @@ const MaxLossBar: React.FC<MaxLossBarProps> = ({ pnlPct, maxLossPct }) => {
   return (
     <div className="mt-2">
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] text-gray-500">
-          Max loss threshold ({maxLossPct}%)
+        <span className="text-[10px] text-gray-500" title="Campaign PnL as % of its margin. Independent of account-level drawdown.">
+          Layer margin stop ({maxLossPct}%)
         </span>
         <span className={`text-[10px] font-medium ${pnlColor(pnlPct)}`}>
           {pnlPct >= 0 ? "+" : ""}

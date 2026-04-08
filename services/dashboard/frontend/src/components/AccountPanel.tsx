@@ -14,6 +14,8 @@ interface AccountState {
   margin_level_pct: number | null;
   realized_pnl_total: number;
   unrealised_pnl: number;
+  account_drawdown_pct: number;
+  account_hard_stop_pct: number;
   open_campaigns: number;
   leverage: number;
 }
@@ -108,8 +110,17 @@ const AccountPanel: React.FC = () => {
       ? (equityDelta / data.starting_balance) * 100
       : 0;
 
+  // Distance to the -50% account hard stop, as a bar.
+  // fillPct = 0 when we're at zero drawdown, 100 when we hit the hard stop.
+  const hardStopPct = Math.abs(data.account_hard_stop_pct || 50);
+  const ddPct = data.account_drawdown_pct;
+  const hardStopFill =
+    ddPct >= 0 ? 0 : Math.min(100, (Math.abs(ddPct) / hardStopPct) * 100);
+  const hardStopColor =
+    hardStopFill > 75 ? "bg-red-500" : hardStopFill > 40 ? "bg-yellow-400" : "bg-green-500";
+
   return (
-    <div className="mb-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+    <div className="mb-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
       {/* Equity — large, highlighted */}
       <Card label="Equity" accent>
         <span className={`text-lg font-bold leading-tight ${pnlColor(equityDelta)}`}>
@@ -124,12 +135,12 @@ const AccountPanel: React.FC = () => {
         </span>
       </Card>
 
-      {/* Cash */}
+      {/* Cash — wallet balance (starting + realized PnL), NOT reduced by margin */}
       <Card label="Cash">
         <span className="text-base font-semibold text-gray-100">
           {fmtUsd(data.cash)}
         </span>
-        <span className="text-[10px] text-gray-500">buying power</span>
+        <span className="text-[10px] text-gray-500">wallet balance</span>
       </Card>
 
       {/* Margin Used */}
@@ -168,6 +179,23 @@ const AccountPanel: React.FC = () => {
           {data.open_campaigns}
         </span>
         <span className="text-[10px] text-gray-500">active</span>
+      </Card>
+
+      {/* Account Drawdown — distance to -50% account hard stop */}
+      <Card label="Drawdown">
+        <span className={`text-base font-semibold ${pnlColor(ddPct)}`}>
+          {ddPct >= 0 ? "+" : ""}
+          {ddPct.toFixed(2)}%
+        </span>
+        <div className="mt-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${hardStopColor}`}
+            style={{ width: `${hardStopFill}%` }}
+          />
+        </div>
+        <span className="text-[10px] text-gray-500">
+          {Math.abs(ddPct).toFixed(2)}% / {hardStopPct.toFixed(0)}% hard stop
+        </span>
       </Card>
     </div>
   );
