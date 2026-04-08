@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, String, Text
+from sqlalchemy import BigInteger, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from shared.models.base import Base
@@ -51,3 +51,10 @@ class Position(Base):
 
     # Free-form notes from Opus when closing / managing
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Campaign / DCA fields — nullable for backwards compat with legacy positions
+    campaign_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    lots: Mapped[float | None] = mapped_column(Float, nullable=True)
+    margin_used: Mapped[float | None] = mapped_column(Float, nullable=True)
+    nominal_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    layer_index: Mapped[int | None] = mapped_column(Integer, nullable=True)

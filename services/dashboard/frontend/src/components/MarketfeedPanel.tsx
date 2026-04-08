@@ -54,7 +54,7 @@ const SentimentSparkline: React.FC<SparklineProps> = ({ data }) => {
 
     const series = chart.addLineSeries({
       color: "#3B82F6",
-      lineWidth: 1.5,
+      lineWidth: 2,
       crosshairMarkerVisible: false,
       lastValueVisible: false,
       priceLineVisible: false,

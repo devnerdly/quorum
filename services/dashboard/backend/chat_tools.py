@@ -76,6 +76,41 @@ TOOLS = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_account_state",
+        "description": (
+            "Get current trading account: starting balance, cash, equity, margin used, "
+            "free margin, margin level%, realized PnL, unrealised PnL."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_campaigns",
+        "description": (
+            "List all trading campaigns (DCA bets), filtered by status (default: open)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["open", "closed", "all"],
+                    "default": "open",
+                }
+            },
+        },
+    },
+    {
+        "name": "get_campaign_detail",
+        "description": (
+            "Get full detail of a specific campaign including all DCA layer fills."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"campaign_id": {"type": "integer"}},
+            "required": ["campaign_id"],
+        },
+    },
+    {
         "name": "simulate_trade",
         "description": (
             "Simulate the risk/reward of a hypothetical trade. Returns R:R ratio, % risk, "
@@ -90,6 +125,58 @@ TOOLS = [
                 "take_profit": {"type": "number"},
             },
             "required": ["side", "entry", "stop_loss", "take_profit"],
+        },
+    },
+    # --- WRITE / EXECUTION TOOLS ---
+    {
+        "name": "close_campaign",
+        "description": (
+            "Close a trading campaign manually at the current market price. This closes "
+            "ALL DCA layers in the campaign and updates the account cash balance with the "
+            "realised PnL. Use when the user explicitly asks to close, OR when breaking news "
+            "has invalidated the original thesis."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {"type": "integer", "description": "ID of the campaign to close"},
+                "reason": {"type": "string", "description": "Why you're closing it (one short sentence)"},
+            },
+            "required": ["campaign_id", "reason"],
+        },
+    },
+    {
+        "name": "add_dca_layer",
+        "description": (
+            "Add the next DCA (dollar-cost-averaging) layer to an open campaign. The layer "
+            "size is determined by the sizing policy ([3k, 6k, 10k, 20k, 30k, 30k] in margin USD). "
+            "Use when the user wants to scale into a position, or when an existing campaign is "
+            "in drawdown and adding more conviction."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "campaign_id": {"type": "integer"},
+                "reason": {"type": "string"},
+            },
+            "required": ["campaign_id", "reason"],
+        },
+    },
+    {
+        "name": "open_new_campaign",
+        "description": (
+            "Open a new trading campaign with the first DCA layer ($3k margin = ~$30k nominal "
+            "at x10 leverage). Only one campaign can be open at a time. Use when the user asks "
+            "to enter a new long/short OR when you have high conviction (score + news + setup) "
+            "and there is no opposite campaign already open."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "side": {"type": "string", "enum": ["LONG", "SHORT"]},
+                "reason": {"type": "string"},
+            },
+            "required": ["side", "reason"],
         },
     },
 ]
@@ -113,8 +200,20 @@ def execute_tool(name: str, tool_input: dict) -> dict:
         return _get_recent_signals(**tool_input)
     if name == "get_open_positions":
         return _get_open_positions()
+    if name == "get_account_state":
+        return _get_account_state()
+    if name == "get_campaigns":
+        return _get_campaigns(**tool_input)
+    if name == "get_campaign_detail":
+        return _get_campaign_detail(**tool_input)
     if name == "simulate_trade":
         return _simulate_trade(**tool_input)
+    if name == "close_campaign":
+        return _close_campaign(**tool_input)
+    if name == "add_dca_layer":
+        return _add_dca_layer(**tool_input)
+    if name == "open_new_campaign":
+        return _open_new_campaign(**tool_input)
     return {"error": f"unknown tool: {name}"}
 
 
@@ -168,6 +267,20 @@ def _get_current_market_state() -> dict:
             .all()
         )
 
+    # Account state
+    try:
+        from shared.account_manager import recompute_account_state
+        account_state = recompute_account_state()
+    except Exception:
+        account_state = None
+
+    # Open campaigns
+    try:
+        from shared.position_manager import list_open_campaigns
+        open_campaigns = list_open_campaigns()
+    except Exception:
+        open_campaigns = []
+
     return {
         "current_price": round(price_row.close, 2) if price_row else None,
         "current_price_source": price_row.source if price_row else None,
@@ -179,6 +292,8 @@ def _get_current_market_state() -> dict:
             "shipping": scores.shipping_score if scores else None,
             "unified": scores.unified_score if scores else None,
         } if scores else None,
+        "account": account_state,
+        "open_campaigns": open_campaigns,
         "open_positions": list_open_positions(),
         "latest_recommendation": {
             "id": rec.id,
@@ -395,6 +510,32 @@ def _get_open_positions() -> dict:
     }
 
 
+def _get_account_state() -> dict:
+    """Return the current account state."""
+    from shared.account_manager import recompute_account_state
+    return recompute_account_state()
+
+
+def _get_campaigns(status: str = "open") -> dict:
+    """List campaigns filtered by status."""
+    from shared.position_manager import list_campaigns
+    camps = list_campaigns(status=status)
+    return {
+        "status_filter": status,
+        "count": len(camps),
+        "campaigns": camps,
+    }
+
+
+def _get_campaign_detail(campaign_id: int) -> dict:
+    """Get full detail for a specific campaign."""
+    from shared.position_manager import compute_campaign_state
+    state = compute_campaign_state(campaign_id)
+    if state is None:
+        return {"error": f"campaign {campaign_id} not found"}
+    return state
+
+
 def _simulate_trade(
     side: str,
     entry: float,
@@ -441,3 +582,107 @@ def _simulate_trade(
             else "Poor R:R"
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# WRITE / EXECUTION TOOLS
+# ---------------------------------------------------------------------------
+
+def _close_campaign(campaign_id: int, reason: str) -> dict:
+    """Manually close a campaign at the current market price."""
+    from shared.position_manager import close_campaign as pm_close_campaign
+    from shared.redis_streams import publish
+    from datetime import datetime, timezone
+
+    snap = pm_close_campaign(campaign_id, status="closed_manual", notes=f"chat: {reason}")
+    if snap is None:
+        return {"error": f"campaign {campaign_id} not found or already closed"}
+
+    # Notify Telegram via the position event stream
+    try:
+        payload = {
+            "type": "manual_close",
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            **snap,
+        }
+        publish("position.event", payload)
+    except Exception:
+        pass
+
+    return {"closed": True, "reason": reason, "snapshot": snap}
+
+
+def _add_dca_layer(campaign_id: int, reason: str) -> dict:
+    """Add the next DCA layer to an open campaign."""
+    from shared.position_manager import add_dca_layer as pm_add_dca, get_current_price
+    from shared.redis_streams import publish
+    from datetime import datetime, timezone
+
+    price = get_current_price()
+    if price is None:
+        return {"error": "no current price available"}
+
+    new_position_id = pm_add_dca(campaign_id, current_price=price)
+    if new_position_id is None:
+        return {"error": f"campaign {campaign_id} not found, closed, or all DCA layers exhausted"}
+
+    try:
+        publish(
+            "position.event",
+            {
+                "type": "dca_added",
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "campaign_id": campaign_id,
+                "new_position_id": new_position_id,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        pass
+
+    return {"layer_added": True, "campaign_id": campaign_id, "new_position_id": new_position_id, "reason": reason}
+
+
+def _open_new_campaign(side: str, reason: str) -> dict:
+    """Open a new trading campaign with the first DCA layer."""
+    from shared.position_manager import open_new_campaign as pm_open_campaign, get_current_price, list_open_campaigns
+    from shared.redis_streams import publish
+    from datetime import datetime, timezone
+
+    side_upper = side.upper()
+    if side_upper not in ("LONG", "SHORT"):
+        return {"error": f"invalid side: {side}"}
+
+    # Enforce single-campaign rule
+    open_now = list_open_campaigns()
+    if open_now:
+        return {
+            "error": (
+                f"cannot open new campaign — there is already an open {open_now[0].get('side')} "
+                f"campaign #{open_now[0].get('id')}. Close it first or add a DCA layer."
+            )
+        }
+
+    price = get_current_price()
+    if price is None:
+        return {"error": "no current price available"}
+
+    campaign_id = pm_open_campaign(side=side_upper, current_price=price)
+    if campaign_id is None:
+        return {"error": "failed to open campaign — check free_margin"}
+
+    try:
+        publish(
+            "position.event",
+            {
+                "type": "campaign_opened",
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "campaign_id": campaign_id,
+                "side": side_upper,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        pass
+
+    return {"opened": True, "campaign_id": campaign_id, "side": side_upper, "reason": reason}

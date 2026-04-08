@@ -6,6 +6,8 @@ from shared.models.signals import AnalysisScore, AIRecommendation
 from shared.models.shipping import ShippingPosition, ShippingMetric
 from shared.models.positions import Position
 from shared.models.knowledge import KnowledgeSummary
+from shared.models.account import Account
+from shared.models.campaigns import Campaign
 
 __all__ = [
     "Base",
@@ -25,4 +27,6 @@ __all__ = [
     "ShippingMetric",
     "Position",
     "KnowledgeSummary",
+    "Account",
+    "Campaign",
 ]

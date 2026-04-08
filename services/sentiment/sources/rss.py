@@ -69,6 +69,38 @@ _BATCH_CLASSIFY_TEMPLATE = """You are an oil-market analyst. Classify each headl
 Headlines (numbered):
 {numbered_headlines}
 
+## CRITICAL SCORING RULES — read carefully
+
+Score the PHYSICAL EVENT, not the political commentary around it.
+
+BULLISH for oil price (positive score):
+- ANY damage / fire / strike / outage at oil/gas infrastructure (refineries, pipelines, terminals, fields, tankers)
+- ANY supply disruption, production cut, sanctions tightening, embargo
+- Escalation of conflicts in oil-producing regions (Middle East, Russia, Venezuela, Nigeria, Libya)
+- Drone / missile / cyber attacks affecting energy assets
+- Weather disruptions in production regions
+- OPEC+ supply cuts or extension of cuts
+- Stronger demand signals (China stimulus, strong PMI)
+- USD weakness, dovish Fed
+- Surprise inventory draws (EIA)
+
+BEARISH for oil price (negative score):
+- Verified de-escalation (signed ceasefire, troops withdrawal)
+- Production INCREASES, OPEC+ unwinding cuts
+- Sanctions easing, Iran deal progress
+- Surprise inventory builds
+- Demand destruction (recession, EV adoption, China weakness)
+- USD strength, hawkish Fed
+
+EXAMPLES (apply this logic strictly):
+- "Iranian refinery struck, US/Israel deny responsibility" → BULLISH (+0.6 to +0.8). The denial is irrelevant — the refinery is damaged. Do NOT score this bearish.
+- "Iran accepts ceasefire framework" → BEARISH (-0.3 to -0.5).
+- "OPEC announces 1mb/d cut extension" → BULLISH (+0.6).
+- "EIA shows 5M barrel build vs 1M expected" → BEARISH (-0.5).
+- "Drone hit on Saudi Aramco" → STRONG BULLISH (+0.8).
+
+Focus on the WHAT (the event) not the WHO/WHY (commentary, denials).
+
 Return a JSON array with EXACTLY {n} objects, one per headline, in the same order:
 [
   {{"i": 0, "sentiment": "bullish"|"bearish"|"neutral", "score": <float -1.0..1.0>, "relevance": <float 0.0..1.0>}},

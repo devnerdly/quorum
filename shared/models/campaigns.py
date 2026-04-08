@@ -1,0 +1,37 @@
+"""Campaign model — a directional DCA trading campaign."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import BigInteger, DateTime, Float, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from shared.models.base import Base
+
+
+class Campaign(Base):
+    """A directional trading campaign — one or more DCA layers on the same side.
+
+    Statuses:
+        open              — campaign is active
+        closed_tp         — closed by take-profit
+        closed_sl         — closed by stop-loss
+        closed_manual     — closed via dashboard
+        closed_strategy   — closed by AI strategy decision
+        closed_hard_stop  — closed by the -50% drawdown hard-stop guard
+    """
+    __tablename__ = "campaigns"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # LONG | SHORT
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    # open | closed_tp | closed_sl | closed_manual | closed_strategy | closed_hard_stop
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", index=True)
+
+    max_loss_pct: Mapped[float] = mapped_column(Float, nullable=False, default=50.0)
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # set on close
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)

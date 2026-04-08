@@ -24,7 +24,16 @@ from shared.models.base import Base, SessionLocal, engine
 from shared.models.ohlcv import OHLCV
 from shared.models.positions import Position
 from shared.models.signals import AIRecommendation, AnalysisScore
-from shared.position_manager import list_open_positions
+from shared.position_manager import (
+    list_open_positions,
+    list_open_campaigns,
+    list_campaigns,
+    compute_campaign_state,
+    close_campaign,
+    add_dca_layer,
+    get_current_price,
+)
+from shared.account_manager import recompute_account_state
 
 from chat import stream_chat
 
@@ -186,19 +195,36 @@ def get_ohlcv(
     timeframe: str = Query(default="1H"),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict[str, Any]:
-    """Return OHLCV bars suitable for Lightweight Charts (sorted ascending by time)."""
+    """Return OHLCV bars suitable for Lightweight Charts (deduped, sorted ascending).
+
+    Multiple sources (Yahoo, Stooq) can publish bars with the same timeframe and
+    timestamp. Lightweight-charts requires UNIQUE monotonic times — we dedupe
+    by timestamp here, preferring Stooq (ICE Brent, more accurate) over Yahoo.
+    """
     db = SessionLocal()
     try:
         rows = (
             db.query(OHLCV)
             .filter(OHLCV.timeframe == timeframe)
             .order_by(desc(OHLCV.timestamp))
-            .limit(limit)
+            .limit(limit * 2)  # over-fetch, we'll dedupe
             .all()
         )
-        # Return in ascending time order for charts
-        rows = list(reversed(rows))
-        return {"data": [_ohlcv_to_dict(r) for r in rows]}
+
+        # Dedupe by timestamp, preferring 'stooq' over 'yahoo'.
+        by_ts: dict[int, OHLCV] = {}
+        for r in rows:
+            if r.open is None or r.high is None or r.low is None or r.close is None:
+                continue  # lightweight-charts can't handle null OHLC
+            ts = int(r.timestamp.timestamp())
+            existing = by_ts.get(ts)
+            if existing is None:
+                by_ts[ts] = r
+            elif existing.source != "stooq" and r.source == "stooq":
+                by_ts[ts] = r  # prefer stooq
+
+        deduped = sorted(by_ts.values(), key=lambda r: r.timestamp)[-limit:]
+        return {"data": [_ohlcv_to_dict(r) for r in deduped]}
     finally:
         db.close()
 
@@ -236,6 +262,92 @@ def get_positions(status: str | None = Query(default=None)) -> dict[str, Any]:
         }
     finally:
         db.close()
+
+
+@app.get("/api/account")
+def get_account_endpoint() -> dict[str, Any]:
+    """Return current account state (cash, equity, margin, PnL)."""
+    try:
+        return {"data": recompute_account_state()}
+    except Exception as exc:
+        logger.exception("get_account_endpoint failed")
+        return {"error": str(exc)}
+
+
+@app.get("/api/campaigns")
+def get_campaigns_endpoint(
+    status: str | None = Query(default="open"),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict[str, Any]:
+    """Return campaigns filtered by status."""
+    try:
+        camps = list_campaigns(status=status, limit=limit)
+        return {"data": camps}
+    except Exception as exc:
+        logger.exception("get_campaigns_endpoint failed")
+        return {"error": str(exc)}
+
+
+@app.get("/api/campaigns/{campaign_id}")
+def get_campaign_detail_endpoint(campaign_id: int) -> dict[str, Any]:
+    """Return full detail for a single campaign."""
+    state = compute_campaign_state(campaign_id)
+    if state is None:
+        return {"error": "campaign not found"}
+    return {"data": state}
+
+
+@app.post("/api/campaigns/{campaign_id}/close")
+def close_campaign_endpoint(campaign_id: int) -> dict[str, Any]:
+    """Manually close a campaign at the current market price."""
+    snap = close_campaign(campaign_id, status="closed_manual", notes="Closed via dashboard")
+    if snap is None:
+        return {"error": "campaign not found or could not be closed (no price?)"}
+
+    try:
+        from shared.redis_streams import publish
+        publish(
+            "position.event",
+            {
+                "type": "campaign_manual_close",
+                "campaign_id": campaign_id,
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        logger.exception("Failed to publish campaign_manual_close event")
+
+    return {"data": snap}
+
+
+@app.post("/api/campaigns/{campaign_id}/dca")
+def add_dca_layer_endpoint(campaign_id: int) -> dict[str, Any]:
+    """Manually add the next DCA layer to a campaign."""
+    price = get_current_price()
+    if price is None:
+        return {"error": "no current price available"}
+
+    pos_id = add_dca_layer(campaign_id, price)
+    if pos_id is None:
+        return {"error": "could not add DCA layer (layers exhausted or campaign not open)"}
+
+    try:
+        from shared.redis_streams import publish
+        publish(
+            "position.event",
+            {
+                "type": "dca_layer_added",
+                "campaign_id": campaign_id,
+                "position_id": pos_id,
+                "price": price,
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        logger.exception("Failed to publish dca_layer_added event")
+
+    state = compute_campaign_state(campaign_id)
+    return {"data": state}
 
 
 @app.post("/api/positions/{position_id}/close")

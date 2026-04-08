@@ -4,10 +4,11 @@ import ScoreGauge from "./components/ScoreGauge";
 import PriceChart, { OHLCVBar, PositionOverlay, SignalOverlay } from "./components/PriceChart";
 import SignalHistory, { Signal } from "./components/SignalHistory";
 import LogsPanel from "./components/LogsPanel";
-import PositionsPanel from "./components/PositionsPanel";
 import SignalDetailDrawer from "./components/SignalDetailDrawer";
 import MarketfeedPanel from "./components/MarketfeedPanel";
 import ChatPanel from "./components/ChatPanel";
+import AccountPanel from "./components/AccountPanel";
+import CampaignsPanel from "./components/CampaignsPanel";
 
 // ---------------------------------------------------------------------------
 // Types matching the backend JSON
@@ -182,6 +183,9 @@ const App: React.FC = () => {
         </span>
       </header>
 
+      {/* Account Panel */}
+      <AccountPanel />
+
       {/* Score Gauges */}
       <section className="mb-6">
         <h2 className="text-xs uppercase tracking-widest text-gray-500 mb-3">
@@ -242,10 +246,8 @@ const App: React.FC = () => {
         )}
       </section>
 
-      {/* Open Positions */}
-      <section className="mb-6">
-        <PositionsPanel />
-      </section>
+      {/* Open Campaigns (replaces PositionsPanel) */}
+      <CampaignsPanel />
 
       {/* Signal History */}
       <section className="mb-6">

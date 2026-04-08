@@ -7,10 +7,13 @@ Run with:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
-from shared.models.base import Base, engine
+from shared.models.base import Base, engine, SessionLocal
+# Import all models so they register with Base.metadata before create_all
+import shared.models  # noqa: F401 — side-effect import to register all ORM classes
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +213,76 @@ def init_db() -> None:
             logger.warning("scores_hourly refresh policy skipped: %s", exc)
             conn.rollback()
 
+    # ------------------------------------------------------------------
+    # Migrate legacy positions & initialise account row
+    # ------------------------------------------------------------------
+    _migrate_legacy_positions()
+    _ensure_account_row()
+
     logger.info("Database initialisation complete.")
+
+
+def _migrate_legacy_positions() -> None:
+    """Assign legacy open positions (campaign_id=NULL) to new Campaign rows.
+
+    Also backfills lots/margin_used/nominal_value with conservative defaults:
+    lots=1, margin_used = entry_price * 100 / 10, layer_index=0.
+    These are tagged with notes="legacy migration".
+    """
+    from shared.models.positions import Position
+    from shared.models.campaigns import Campaign
+
+    with SessionLocal() as session:
+        legacy = (
+            session.query(Position)
+            .filter(Position.status == "open", Position.campaign_id.is_(None))
+            .all()
+        )
+        if not legacy:
+            logger.info("No legacy positions to migrate.")
+            return
+
+        logger.info("Migrating %d legacy position(s) to campaigns…", len(legacy))
+        for pos in legacy:
+            # Create a campaign for this legacy position
+            campaign = Campaign(
+                opened_at=pos.opened_at or datetime.now(tz=timezone.utc),
+                side=pos.side,
+                status="open",
+                max_loss_pct=50.0,
+                notes="legacy migration",
+            )
+            session.add(campaign)
+            session.flush()
+
+            # Backfill sizing: lots=1, margin = entry*100/10, nominal = entry*100
+            lots = 1.0
+            margin = (pos.entry_price * 100) / 10
+            nominal = pos.entry_price * 100
+
+            pos.campaign_id = campaign.id
+            pos.lots = lots
+            pos.margin_used = margin
+            pos.nominal_value = nominal
+            pos.layer_index = 0
+            pos.notes = ((pos.notes + "\n") if pos.notes else "") + "legacy migration"
+
+            logger.info(
+                "Migrated position #%s → campaign #%s (%s @ %.2f, lots=1)",
+                pos.id, campaign.id, pos.side, pos.entry_price,
+            )
+
+        session.commit()
+
+
+def _ensure_account_row() -> None:
+    """Create the singleton account row if it doesn't exist yet."""
+    from shared.account_manager import get_or_create_account
+    try:
+        get_or_create_account()
+        logger.info("Account row ensured.")
+    except Exception as exc:
+        logger.warning("Could not ensure account row: %s", exc)
 
 
 if __name__ == "__main__":

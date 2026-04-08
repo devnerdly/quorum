@@ -312,6 +312,7 @@ def synthesize_recommendation(
     haiku_summary: str,
     grok_narrative: str,
     open_positions: list[dict] | None = None,
+    breaking_news: dict | None = None,
 ) -> dict:
     """Call Claude Opus to synthesise a trading recommendation.
 
@@ -377,7 +378,32 @@ def synthesize_recommendation(
             "the setup is strong, otherwise WAIT.\n\n"
         )
 
+    # Optional breaking-news urgent block — only present when this cycle was
+    # triggered by a high-impact knowledge digest that contradicts an open campaign.
+    breaking_block = ""
+    if breaking_news:
+        bn_summary = (breaking_news.get("summary") or "")[:500]
+        bn_score = breaking_news.get("sentiment_score") or 0
+        bn_label = breaking_news.get("sentiment_label") or "?"
+        bn_events = breaking_news.get("key_events") or []
+        bn_favors = breaking_news.get("favors_side") or "?"
+        bn_conflicts = breaking_news.get("conflicting_campaign_ids") or []
+        events_str = "\n".join(f"  - {e}" for e in bn_events[:6])
+        breaking_block = (
+            "## 🚨 URGENT — BREAKING NEWS CONTRADICTS OPEN POSITION\n"
+            f"This cycle was triggered out-of-band by a high-impact @marketfeed digest.\n\n"
+            f"**Sentiment**: {bn_label.upper()} ({bn_score:+.2f}) — favors **{bn_favors}**\n"
+            f"**Summary**: {bn_summary}\n"
+            f"**Key events**:\n{events_str}\n\n"
+            f"**Conflicting campaign IDs**: {bn_conflicts}\n\n"
+            "DECISION REQUIRED: For each conflicting campaign, decide via `manage_positions`:\n"
+            "  - `close` — exit immediately if the news has materially invalidated the original thesis\n"
+            "  - `hold` — keep the position if the news is noise or already priced in\n"
+            "Be decisive. If you decide to close, explain the specific event in the reason field.\n\n"
+        )
+
     user_prompt = (
+        f"{breaking_block}"
         f"## Current Brent Crude Market Snapshot (USE THESE EXACT PRICES)\n{market_text}\n\n"
         f"{positions_block}"
         f"## Knowledge Base — Recent @marketfeed Digests (newest first)\n{knowledge_text}\n\n"

@@ -70,16 +70,50 @@ _COMBINED_PROMPT = """You are an oil-market analyst. Analyze these {n} breaking-
 Headlines (numbered, last 5 minutes, newest first):
 {numbered_headlines}
 
+## CRITICAL SCORING RULES — read carefully
+
+Score the PHYSICAL EVENT, not the political commentary around it.
+
+BULLISH for oil price (positive score):
+- ANY damage / fire / strike / outage at oil/gas infrastructure (refineries, pipelines, terminals, fields, tankers)
+- ANY supply disruption, production cut, sanctions tightening, embargo
+- Escalation of conflicts in oil-producing regions (Middle East, Russia, Venezuela, Nigeria, Libya)
+- Drone / missile / cyber attacks affecting energy assets
+- Hurricane / extreme weather affecting Gulf of Mexico or other production regions
+- OPEC+ supply cuts or extension of cuts
+- Stronger-than-expected demand (China stimulus, strong PMI, summer driving)
+- USD weakness, dovish Fed (cheaper for non-USD buyers)
+- Lower-than-expected inventory builds, surprise draws (EIA)
+
+BEARISH for oil price (negative score):
+- Verified de-escalation (signed ceasefire, troops withdrawal)
+- Production INCREASES, OPEC+ unwinding cuts
+- Sanctions easing, Iran deal progress, Venezuela waiver
+- Inventory builds bigger than expected
+- Demand destruction (recession, China weakness, EV adoption headlines)
+- USD strength, hawkish Fed
+- Refinery capacity additions
+
+EXAMPLES (apply this logic strictly):
+- "Iranian refinery struck, US/Israel deny responsibility" → BULLISH (+0.6 to +0.8). The denial is irrelevant — the refinery is damaged, supply at risk, attribution uncertainty raises the risk premium. Do NOT score this bearish.
+- "Iran accepts ceasefire framework" → BEARISH (-0.3 to -0.5). De-escalation reduces war premium.
+- "OPEC announces 1mb/d cut extension" → BULLISH (+0.6).
+- "EIA shows 5M barrel build vs 1M expected" → BEARISH (-0.5).
+- "Trump signs deal with Saudi Arabia on production" → context-dependent; if INCREASING production → BEARISH; if CUT → BULLISH.
+- "Drone hit on Saudi Aramco facility" → STRONG BULLISH (+0.8).
+
+Focus on the WHAT (the event itself) not the WHO/WHY (commentary, denials, attribution debates).
+
 Return a JSON object with EXACTLY these keys (no markdown, no extra text):
 {{
   "items": [
-    {{"i": 0, "sentiment": "bullish"|"bearish"|"neutral", "score": <-1..1>, "relevance": <0..1>, "reason": "<short>"}},
+    {{"i": 0, "sentiment": "bullish"|"bearish"|"neutral", "score": <-1..1>, "relevance": <0..1>, "reason": "<short, cite the specific event>"}},
     ... (one per headline, in order)
   ],
   "digest": {{
-    "summary": "2-3 sentence digest of what just happened in the oil market",
+    "summary": "2-3 sentence digest of what just happened in the oil market. Lead with the most material physical event.",
     "key_events": ["3-6 bullet strings, each one specific event with country/entity/number where present"],
-    "sentiment_score": <float -1..1, aggregate market impact>,
+    "sentiment_score": <float -1..1, aggregate market impact based on the rules above>,
     "sentiment_label": "bullish"|"bearish"|"neutral"
   }}
 }}
