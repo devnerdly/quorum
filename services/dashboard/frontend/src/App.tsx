@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import useApi from "./hooks/useApi";
 import ScoreGauge from "./components/ScoreGauge";
-import PriceChart, { OHLCVBar } from "./components/PriceChart";
+import PriceChart, { OHLCVBar, PositionOverlay, SignalOverlay } from "./components/PriceChart";
 import SignalHistory, { Signal } from "./components/SignalHistory";
 import LogsPanel from "./components/LogsPanel";
 import PositionsPanel from "./components/PositionsPanel";
+import SignalDetailDrawer from "./components/SignalDetailDrawer";
+import MarketfeedPanel from "./components/MarketfeedPanel";
+import ChatPanel from "./components/ChatPanel";
 
 // ---------------------------------------------------------------------------
 // Types matching the backend JSON
@@ -25,6 +28,14 @@ interface WsUpdate {
   timestamp: string;
   latest_score: AnalysisScore | null;
   latest_signal: Signal | null;
+}
+
+interface OpenPosition {
+  id: number;
+  side: "LONG" | "SHORT";
+  entry_price: number;
+  stop_loss: number | null;
+  take_profit: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +99,12 @@ const App: React.FC = () => {
     { pollInterval: 30_000 }
   );
 
+  // Open positions — for chart overlays (polled every 5s)
+  const { data: openPositions } = useApi<OpenPosition[]>(
+    "/api/positions?status=open",
+    { pollInterval: 5_000 }
+  );
+
   // Timeframe selector — poll faster for lower timeframes
   const [timeframe, setTimeframe] = useState<string>("1min");
   const pollInterval =
@@ -114,6 +131,24 @@ const App: React.FC = () => {
   const wsConnected = useWebSocket(WS_URL, handleWsMessage);
 
   const score = liveScore ?? latestScore;
+
+  // Signal detail drawer state
+  const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
+
+  // Derived overlays for PriceChart
+  const positionOverlays: PositionOverlay[] = (openPositions ?? []).map((p) => ({
+    id: p.id,
+    side: p.side,
+    entry_price: p.entry_price,
+    stop_loss: p.stop_loss,
+    take_profit: p.take_profit,
+  }));
+
+  const signalOverlays: SignalOverlay[] = (signals ?? []).map((s) => ({
+    id: s.id,
+    timestamp: s.timestamp,
+    action: s.action,
+  }));
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-4 md:p-6">
@@ -197,7 +232,13 @@ const App: React.FC = () => {
             Loading chart…
           </div>
         ) : (
-          <PriceChart key={timeframe} bars={ohlcv ?? []} timeframe={timeframe} />
+          <PriceChart
+            key={timeframe}
+            bars={ohlcv ?? []}
+            timeframe={timeframe}
+            positions={positionOverlays}
+            signals={signalOverlays}
+          />
         )}
       </section>
 
@@ -214,14 +255,31 @@ const App: React.FC = () => {
         {signalsLoading && (!signals || signals.length === 0) ? (
           <p className="text-gray-600 text-sm">Loading signals…</p>
         ) : (
-          <SignalHistory signals={signals ?? []} />
+          <SignalHistory
+            signals={signals ?? []}
+            onSignalClick={setSelectedSignalId}
+          />
         )}
+      </section>
+
+      {/* Marketfeed Knowledge */}
+      <section className="mb-6">
+        <MarketfeedPanel />
       </section>
 
       {/* Live Logs */}
       <section>
         <LogsPanel />
       </section>
+
+      {/* Signal detail drawer — portaled over layout */}
+      <SignalDetailDrawer
+        signalId={selectedSignalId}
+        onClose={() => setSelectedSignalId(null)}
+      />
+
+      {/* Floating chat panel */}
+      <ChatPanel />
     </div>
   );
 };

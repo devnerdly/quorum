@@ -14,7 +14,9 @@ import redis as redis_sync
 import docker as docker_sdk
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from sqlalchemy import desc, text
 
 from shared.config import settings
@@ -23,6 +25,8 @@ from shared.models.ohlcv import OHLCV
 from shared.models.positions import Position
 from shared.models.signals import AIRecommendation, AnalysisScore
 from shared.position_manager import list_open_positions
+
+from chat import stream_chat
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -255,6 +259,142 @@ def close_position_endpoint(position_id: int) -> dict[str, Any]:
         logger.exception("Failed to publish manual_close event")
 
     return {"data": snap}
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 endpoints: /api/signals/{id}, /api/knowledge, /api/chat
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str = "default"
+
+
+def _parse_key_events(raw: str | None) -> list:
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+@app.post("/api/chat")
+def chat_endpoint(req: ChatRequest):
+    """Stream a chat response via Server-Sent Events."""
+    return StreamingResponse(
+        stream_chat(req.message, req.session_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/signals/{signal_id}")
+def get_signal_detail(signal_id: int) -> dict[str, Any]:
+    """Return full detail for a single AIRecommendation including nearby scores and knowledge."""
+    from shared.models.knowledge import KnowledgeSummary
+
+    db = SessionLocal()
+    try:
+        rec = db.query(AIRecommendation).filter(AIRecommendation.id == signal_id).first()
+        if rec is None:
+            return {"error": "not found"}
+
+        window_start = rec.timestamp - timedelta(minutes=15)
+        window_end = rec.timestamp + timedelta(minutes=15)
+
+        # Closest AnalysisScore row within the ±15-min window
+        scores = (
+            db.query(AnalysisScore)
+            .filter(AnalysisScore.timestamp.between(window_start, window_end))
+            .order_by(desc(AnalysisScore.timestamp))
+            .first()
+        )
+
+        # Knowledge digests within the same window
+        nearby_knowledge = (
+            db.query(KnowledgeSummary)
+            .filter(KnowledgeSummary.timestamp.between(window_start, window_end))
+            .order_by(desc(KnowledgeSummary.timestamp))
+            .all()
+        )
+
+        return {
+            "data": {
+                "id": rec.id,
+                "timestamp": rec.timestamp.isoformat(),
+                "action": rec.action,
+                "confidence": rec.confidence,
+                "unified_score": rec.unified_score,
+                "opus_override_score": rec.opus_override_score,
+                "analysis_text": rec.analysis_text,
+                "base_scenario": rec.base_scenario,
+                "alt_scenario": rec.alt_scenario,
+                "risk_factors": rec.risk_factors,
+                "entry_price": rec.entry_price,
+                "stop_loss": rec.stop_loss,
+                "take_profit": rec.take_profit,
+                "haiku_summary": rec.haiku_summary,
+                "grok_narrative": rec.grok_narrative,
+                "scores_at_signal": {
+                    "technical_score": scores.technical_score,
+                    "fundamental_score": scores.fundamental_score,
+                    "sentiment_score": scores.sentiment_score,
+                    "shipping_score": scores.shipping_score,
+                    "unified_score": scores.unified_score,
+                } if scores else None,
+                "knowledge_summaries_nearby": [
+                    {
+                        "id": k.id,
+                        "timestamp": k.timestamp.isoformat(),
+                        "summary": k.summary,
+                        "key_events": _parse_key_events(k.key_events),
+                        "sentiment_score": k.sentiment_score,
+                        "sentiment_label": k.sentiment_label,
+                    }
+                    for k in nearby_knowledge
+                ],
+            }
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/knowledge")
+def get_knowledge(
+    hours: int = Query(default=24, ge=1, le=168),
+    limit: int = Query(default=50, ge=1, le=200),
+    q: str | None = None,
+) -> dict[str, Any]:
+    """Browse the knowledge base. Supports hour window, result limit, and keyword filter."""
+    from shared.models.knowledge import KnowledgeSummary
+
+    db = SessionLocal()
+    try:
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+        query = db.query(KnowledgeSummary).filter(KnowledgeSummary.timestamp >= cutoff)
+        if q:
+            query = query.filter(KnowledgeSummary.summary.ilike(f"%{q}%"))
+        rows = query.order_by(desc(KnowledgeSummary.timestamp)).limit(limit).all()
+
+        return {
+            "data": [
+                {
+                    "id": k.id,
+                    "timestamp": k.timestamp.isoformat(),
+                    "source": k.source,
+                    "window": k.window,
+                    "message_count": k.message_count,
+                    "summary": k.summary,
+                    "key_events": _parse_key_events(k.key_events),
+                    "sentiment_score": k.sentiment_score,
+                    "sentiment_label": k.sentiment_label,
+                }
+                for k in rows
+            ]
+        }
+    finally:
+        db.close()
 
 
 @app.get("/api/health")

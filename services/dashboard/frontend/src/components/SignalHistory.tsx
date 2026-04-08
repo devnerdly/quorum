@@ -14,6 +14,7 @@ export interface Signal {
 
 interface SignalHistoryProps {
   signals: Signal[];
+  onSignalClick?: (id: number) => void;
 }
 
 function ActionBadge({ action }: { action: string }) {
@@ -47,7 +48,7 @@ function fmtDate(iso: string): string {
 /**
  * Table listing recent AI trading recommendations.
  */
-const SignalHistory: React.FC<SignalHistoryProps> = ({ signals }) => {
+const SignalHistory: React.FC<SignalHistoryProps> = ({ signals, onSignalClick }) => {
   if (signals.length === 0) {
     return (
       <div className="bg-gray-900 rounded-xl p-4 text-gray-500 text-sm">
@@ -78,7 +79,10 @@ const SignalHistory: React.FC<SignalHistoryProps> = ({ signals }) => {
           {signals.map((s) => (
             <tr
               key={s.id}
-              className="border-b border-gray-800 hover:bg-gray-800 transition-colors"
+              onClick={() => onSignalClick?.(s.id)}
+              className={`border-b border-gray-800 hover:bg-gray-800 transition-colors ${
+                onSignalClick ? "cursor-pointer" : ""
+              }`}
             >
               <td className="py-2 pr-3 text-gray-400 whitespace-nowrap">
                 {fmtDate(s.timestamp)}
