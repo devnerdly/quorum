@@ -13,7 +13,7 @@ class AnalysisScore(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    # Module scores: -1.0 (very bearish) … +1.0 (very bullish)
+    # Module scores: -100 (extreme bearish) … +100 (extreme bullish)
     technical_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     fundamental_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     sentiment_score: Mapped[float | None] = mapped_column(Float, nullable=True)

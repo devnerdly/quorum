@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import anthropic
 import feedparser
+import requests
 
 from shared.config import settings
 from shared.models.base import SessionLocal
@@ -19,14 +21,27 @@ logger = logging.getLogger(__name__)
 
 FEEDS: list[dict[str, str]] = [
     {
-        "name": "reuters_commodities",
-        "url": "https://feeds.reuters.com/reuters/businessNews",
-    },
-    {
-        "name": "oilprice",
+        "name": "oilprice_main",
         "url": "https://oilprice.com/rss/main",
     },
+    {
+        "name": "oilprice_geopolitics",
+        "url": "https://oilprice.com/rss/geopolitics",
+    },
+    {
+        "name": "oilprice_breaking",
+        "url": "https://oilprice.com/rss/breaking",
+    },
+    {
+        "name": "rigzone",
+        "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx",
+    },
 ]
+
+_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; BrentBot/1.0)",
+    "Accept": "application/rss+xml, application/xml, text/xml, */*",
+}
 
 _STREAM = "sentiment.news"
 _HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -66,6 +81,18 @@ def classify_article(title: str, source: str) -> dict:
             messages=[{"role": "user", "content": prompt}],
         )
         raw = message.content[0].text.strip()
+
+        # Strip optional ```json ... ``` markdown fences
+        fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+        if fence:
+            raw = fence.group(1).strip()
+
+        # Fall back to grabbing the first {...} object if there is surrounding text
+        if not raw.startswith("{"):
+            brace = re.search(r"\{[\s\S]*\}", raw)
+            if brace:
+                raw = brace.group(0)
+
         data = json.loads(raw)
         return {
             "sentiment": str(data.get("sentiment", "neutral")),
@@ -73,7 +100,11 @@ def classify_article(title: str, source: str) -> dict:
             "relevance": float(data.get("relevance", 0.0)),
         }
     except Exception:
-        logger.exception("Haiku classification failed for title=%r", title)
+        logger.exception(
+            "Haiku classification failed for title=%r — raw response: %r",
+            title,
+            locals().get("raw", ""),
+        )
         return {"sentiment": "neutral", "score": 0.0, "relevance": 0.0}
 
 
@@ -87,10 +118,17 @@ def fetch_and_classify() -> list[dict]:
 
     for feed_cfg in FEEDS:
         feed_name = feed_cfg["name"]
-        feed = feedparser.parse(feed_cfg["url"])
+        try:
+            response = requests.get(feed_cfg["url"], headers=_HTTP_HEADERS, timeout=20)
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
+        except Exception as exc:
+            logger.warning("Failed to fetch RSS feed %s: %s", feed_name, exc)
+            continue
 
-        if feed.bozo:
-            logger.warning("Feed %s may be malformed: %s", feed_name, feed.bozo_exception)
+        if feed.bozo and not feed.entries:
+            logger.warning("Feed %s parse error: %s", feed_name, feed.bozo_exception)
+            continue
 
         for entry in feed.entries:
             title = entry.get("title", "").strip()

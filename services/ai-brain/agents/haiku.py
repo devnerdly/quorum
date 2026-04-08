@@ -5,13 +5,39 @@ from __future__ import annotations
 import logging
 
 import anthropic
+from sqlalchemy import desc
 
 from shared.config import settings
+from shared.models.base import SessionLocal
+from shared.models.ohlcv import OHLCV
 
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
 FALLBACK = "Unable to generate Haiku summary at this time."
+
+
+def _get_current_price() -> float | None:
+    """Return the most recent Brent close (prefers Stooq ICE Brent)."""
+    try:
+        with SessionLocal() as session:
+            row = (
+                session.query(OHLCV)
+                .filter(OHLCV.timeframe == "1min", OHLCV.source == "stooq")
+                .order_by(desc(OHLCV.timestamp))
+                .first()
+            )
+            if row is None:
+                row = (
+                    session.query(OHLCV)
+                    .filter(OHLCV.timeframe == "1min")
+                    .order_by(desc(OHLCV.timestamp))
+                    .first()
+                )
+            return float(row.close) if row else None
+    except Exception:
+        logger.exception("Failed to read current price for Haiku prompt")
+        return None
 
 
 def summarize_scores(scores: dict) -> str:
@@ -33,9 +59,20 @@ def summarize_scores(scores: dict) -> str:
     scores_text = "\n".join(
         f"  {k}: {v}" for k, v in scores.items()
     )
+    current_price = _get_current_price()
+    price_anchor = (
+        f"FACT — current Brent (ICE) price is ${current_price:.2f}. "
+        f"Use ONLY this price level if you reference any number — do not invent prices.\n\n"
+        if current_price is not None
+        else ""
+    )
     prompt = (
+        f"{price_anchor}"
         "You are a Brent crude oil market analyst assistant. "
-        "Below are composite analysis scores (scale: -1.0 = very bearish, +1.0 = very bullish):\n\n"
+        "Below are composite analysis scores on a -100..+100 scale "
+        "(scale: -100 = extreme bearish, 0 = neutral, +100 = extreme bullish). "
+        "Interpret values correctly: e.g. 38.5 means moderately bullish (38/100), "
+        "NOT near-neutral.\n\n"
         f"{scores_text}\n\n"
         "Write a concise 3-4 sentence summary covering the technical, fundamental, "
         "and sentiment outlook for Brent crude oil based on these scores. "

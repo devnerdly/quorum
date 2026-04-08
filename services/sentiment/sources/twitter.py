@@ -7,9 +7,11 @@ import logging
 from datetime import datetime, timezone
 
 from openai import OpenAI
+from sqlalchemy import desc
 
 from shared.config import settings
 from shared.models.base import SessionLocal
+from shared.models.ohlcv import OHLCV
 from shared.models.sentiment import SentimentTwitter
 from shared.redis_streams import publish
 from shared.schemas.events import SentimentEvent
@@ -20,16 +22,41 @@ _STREAM = "sentiment.twitter"
 _GROK_MODEL = "grok-3"
 _XAI_BASE_URL = "https://api.x.ai/v1"
 
-_GROK_PROMPT = """Analyze the current sentiment on Twitter/X regarding crude oil prices and the Brent crude oil market.
+_GROK_PROMPT_TEMPLATE = """{price_anchor}Analyze the current sentiment on Twitter/X regarding crude oil prices and the Brent crude oil market.
 
-Based on your knowledge of recent Twitter discussions, provide a JSON response with exactly these keys:
+Based on your real-time access to Twitter/X, provide a JSON response with exactly these keys:
 - score: float between -1.0 (very bearish) and 1.0 (very bullish) representing aggregate sentiment
 - narrative: string describing the dominant market narrative on Twitter (e.g. "supply cut optimism", "recession demand fears")
 - topics: list of strings with key topics or hashtags trending (e.g. ["#OPEC", "#CrudeOil", "supply cuts"])
 
+If you reference price levels in the narrative, use ONLY the FACT above — do not invent prices from your training data.
+
 Respond only with the JSON object and no other text.
 
-Example: {"score": 0.3, "narrative": "OPEC supply cut optimism driving bullish sentiment", "topics": ["#OPEC", "#CrudeOil", "supply cuts", "#Brent"]}"""
+Example: {{"score": 0.3, "narrative": "OPEC supply cut optimism driving bullish sentiment", "topics": ["#OPEC", "#CrudeOil", "supply cuts", "#Brent"]}}"""
+
+
+def _get_current_price() -> float | None:
+    """Return the most recent Brent close (prefers Stooq ICE Brent)."""
+    try:
+        with SessionLocal() as session:
+            row = (
+                session.query(OHLCV)
+                .filter(OHLCV.timeframe == "1min", OHLCV.source == "stooq")
+                .order_by(desc(OHLCV.timestamp))
+                .first()
+            )
+            if row is None:
+                row = (
+                    session.query(OHLCV)
+                    .filter(OHLCV.timeframe == "1min")
+                    .order_by(desc(OHLCV.timestamp))
+                    .first()
+                )
+            return float(row.close) if row else None
+    except Exception:
+        logger.exception("Failed to read current price for Grok prompt")
+        return None
 
 
 def parse_grok_response(text: str) -> dict:
@@ -64,16 +91,22 @@ def parse_grok_response(text: str) -> dict:
 
 
 def fetch_twitter_sentiment() -> dict:
-    """Call Grok to get aggregated Twitter/X sentiment for crude oil.
-
-    Returns a dict with keys: score, narrative, topics.
-    """
+    """Call Grok to get aggregated Twitter/X sentiment for crude oil."""
     client = OpenAI(api_key=settings.xai_api_key, base_url=_XAI_BASE_URL)
+
+    current_price = _get_current_price()
+    price_anchor = (
+        f"FACT — current Brent (ICE) price is ${current_price:.2f}. "
+        f"Do NOT cite any other price level. Do not invent prices from your training data.\n\n"
+        if current_price is not None
+        else ""
+    )
+    prompt = _GROK_PROMPT_TEMPLATE.format(price_anchor=price_anchor)
 
     try:
         response = client.chat.completions.create(
             model=_GROK_MODEL,
-            messages=[{"role": "user", "content": _GROK_PROMPT}],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=256,
         )
         raw = response.choices[0].message.content or ""

@@ -7,11 +7,15 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# Weights for unified score
+# Weights for unified score.
+# Technical dominates because the analyzer runs on 15-min cycles — fundamental
+# data (EIA, COT) is weekly and does not change between cycles, so giving it
+# a high weight would make the score stale and unresponsive to price action.
+# Sentiment/shipping reacts quickly and supplements technical signals.
 WEIGHTS = {
-    "technical": 0.40,
-    "fundamental": 0.35,
-    "sentiment_shipping": 0.25,
+    "technical": 0.55,
+    "fundamental": 0.15,
+    "sentiment_shipping": 0.30,
 }
 
 
@@ -32,7 +36,7 @@ def compute_unified_score(
 ) -> float | None:
     """Compute weighted unified score from module scores.
 
-    Weights: technical=0.40, fundamental=0.35, sentiment_shipping=0.25.
+    Weights: technical=0.55, fundamental=0.15, sentiment_shipping=0.30.
     Missing (None) scores are excluded and weights are renormalised.
     Returns a score in [-100, 100] or None if all inputs are None.
     """

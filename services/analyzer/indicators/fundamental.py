@@ -20,20 +20,25 @@ def _clamp(value: float, lo: float = -100.0, hi: float = 100.0) -> float:
 def score_eia_inventory(change: float) -> float:
     """Score EIA crude inventory change.
 
+    EIA stores inventory_change in thousand barrels (e.g. -5000 for a 5M bbl draw).
     Draw (negative change) = bullish (positive score).
     Build (positive change) = bearish (negative score).
-    Scale: -change * 10 (e.g. -5M barrel draw → +50).
+    Scale: -change / 50 (e.g. -5000 kbbl draw → +100, -1000 kbbl → +20).
     """
-    return _clamp(-change * 10.0)
+    return _clamp(-change / 50.0)
 
 
 def score_cot_positioning(net: float) -> float:
     """Score CFTC COT net speculator positioning.
 
     Net long = bullish (positive score).
-    Scale: net / 3000 (e.g. +60k net long → +20).
+    NC net positioning is typically 200-500k contracts; scale accordingly.
+    Scale: net / 5000 (e.g. +250k net long → +50, +500k → +100).
+
+    TODO: Ideally this should be a rolling 52-week z-score rather than a
+    fixed divisor, so the score is relative to the historical range.
     """
-    return _clamp(net / 3000.0)
+    return _clamp(net / 5000.0)
 
 
 def score_usd(current: float, previous: float) -> float:

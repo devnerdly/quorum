@@ -1,4 +1,9 @@
-"""JODI (Joint Organisations Data Initiative) oil statistics collector."""
+"""JODI (Joint Organisations Data Initiative) oil statistics collector.
+
+JODI Oil World Database publishes monthly statistics (production, demand,
+exports, imports, stocks) per country. Data is available as annual CSV files
+under /annual-csv/primary/{year}.csv. We fetch the current year file each run.
+"""
 
 from __future__ import annotations
 
@@ -17,19 +22,19 @@ from shared.schemas.events import MacroEvent
 
 logger = logging.getLogger(__name__)
 
-# JODI World database — public CSV download
-_JODI_URL = "https://www.jodidata.org/_resources/files/downloads/oil-data/jodi_oil_worlddb_csv.zip"
-# Fallback direct CSV URL (JODI publishes data at multiple endpoints)
-_JODI_CSV_URL = "https://www.jodidata.org/_resources/files/downloads/oil-data/jodi_oil_worlddb_csv.csv"
+# JODI publishes annual CSVs with the convention:
+#   /annual-csv/primary/{year}.csv         (older years)
+#   /annual-csv/primary/primaryyear{year}.csv  (current year)
+_JODI_BASE = "https://www.jodidata.org/_resources/files/downloads/oil-data/annual-csv/primary"
 _STREAM = "macro.jodi"
 
-# Columns expected in JODI CSV (standard JODI World format)
-_COL_COUNTRY = "COUNTRY"
-_COL_PRODUCT = "PRODUCT"
-_COL_FLOW = "FLOW"
-_COL_UNIT = "UNIT"
-_COL_DATE = "DATE"
-_COL_VALUE = "VALUE"
+# Columns in the current JODI primary CSV format
+_COL_COUNTRY = "REF_AREA"
+_COL_DATE = "TIME_PERIOD"
+_COL_PRODUCT = "ENERGY_PRODUCT"
+_COL_FLOW = "FLOW_BREAKDOWN"
+_COL_UNIT = "UNIT_MEASURE"
+_COL_VALUE = "OBS_VALUE"
 
 
 def _parse_date(date_str: str) -> datetime | None:
@@ -84,15 +89,36 @@ def parse_jodi_csv(text: str) -> list[dict[str, Any]]:
 
 
 def fetch_jodi() -> list[dict[str, Any]]:
-    """Download and parse the JODI World oil statistics CSV.
+    """Download and parse the current-year JODI primary CSV.
 
-    Returns:
-        List of parsed record dicts (see :func:`parse_jodi_csv`).
+    Tries the "current year" naming convention first
+    (``primaryyear{YYYY}.csv``), then falls back to plain ``{YYYY}.csv``,
+    and finally to the previous year if neither works yet.
     """
-    logger.info("Fetching JODI data from %s", _JODI_CSV_URL)
-    response = requests.get(_JODI_CSV_URL, timeout=60)
-    response.raise_for_status()
-    return parse_jodi_csv(response.text)
+    current_year = datetime.now(tz=timezone.utc).year
+    candidates = [
+        f"{_JODI_BASE}/primaryyear{current_year}.csv",
+        f"{_JODI_BASE}/{current_year}.csv",
+        f"{_JODI_BASE}/{current_year - 1}.csv",
+    ]
+
+    for url in candidates:
+        try:
+            logger.info("Trying JODI URL: %s", url)
+            response = requests.get(url, timeout=60)
+            response.raise_for_status()
+            # Some endpoints return HTML 404 page with 200 status — sanity check
+            if "REF_AREA" not in response.text[:200]:
+                logger.warning("URL %s returned non-CSV body, trying next", url)
+                continue
+            return parse_jodi_csv(response.text)
+        except requests.HTTPError as exc:
+            logger.warning("JODI URL %s returned %s", url, exc)
+        except Exception:
+            logger.exception("Unexpected error fetching JODI URL %s", url)
+
+    logger.error("All JODI candidate URLs failed")
+    return []
 
 
 def collect_and_store() -> None:

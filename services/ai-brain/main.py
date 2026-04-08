@@ -9,6 +9,12 @@ from datetime import datetime, timezone
 
 from shared.redis_streams import subscribe, publish
 from shared.schemas.events import RecommendationEvent
+from shared.position_manager import (
+    check_tp_sl_hits,
+    list_open_positions,
+    open_position,
+    close_position,
+)
 
 from agents.haiku import summarize_scores
 from agents.grok import get_twitter_narrative
@@ -22,13 +28,56 @@ logger = logging.getLogger(__name__)
 
 STREAM_IN = "analysis.scores"
 STREAM_OUT = "signal.recommendation"
+STREAM_POSITION = "position.event"
 GROUP = "ai-brain"
 CONSUMER = "ai-brain-1"
+
+# Minimum confidence required to open a new position.
+# Prevents stacking positions when Opus is uncertain or stuck in a loop.
+MIN_OPEN_CONFIDENCE = 0.65
+
+
+def _publish_position_event(kind: str, snap: dict) -> None:
+    """Publish a position lifecycle event to the notifier."""
+    payload = {
+        "type": kind,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **snap,
+    }
+    try:
+        publish(STREAM_POSITION, payload)
+        logger.info("Published position.%s for #%s", kind, snap.get("id"))
+    except Exception:
+        logger.exception("Failed to publish position event")
 
 
 def process_scores(scores: dict) -> None:
     """Run the full AI pipeline for a given scores event and publish the result."""
-    logger.info("Processing scores: unified=%s", scores.get("unified_score"))
+    unified = scores.get("unified_score")
+    tech = scores.get("technical_score")
+    fund = scores.get("fundamental_score")
+    sent = scores.get("sentiment_score")
+
+    # Skip if we don't have any real data yet — avoid burning tokens
+    # on empty/None scores during cold start.
+    if unified is None and tech is None and fund is None and sent is None:
+        logger.info("Skipping scores event — all scores are None (cold start)")
+        return
+
+    logger.info("Processing scores: unified=%s", unified)
+
+    # --- Step 0: Check existing open positions for TP/SL hits ---
+    try:
+        closed_hits = check_tp_sl_hits()
+        for snap in closed_hits:
+            kind = "tp_hit" if snap["status"] == "closed_tp" else "sl_hit"
+            _publish_position_event(kind, snap)
+    except Exception:
+        logger.exception("TP/SL check failed")
+
+    open_positions = list_open_positions()
+    if open_positions:
+        logger.info("Tracking %d open positions", len(open_positions))
 
     # --- Step 1: Haiku + Grok in parallel ---
     haiku_summary: str = ""
@@ -54,13 +103,81 @@ def process_scores(scores: dict) -> None:
                     logger.exception("Grok agent raised an unexpected error")
                     grok_narrative = "Grok narrative unavailable."
 
-    # --- Step 2: Opus sequentially ---
-    rec = synthesize_recommendation(scores, haiku_summary, grok_narrative)
+    # --- Step 2: Opus sequentially (with open positions context) ---
+    rec = synthesize_recommendation(
+        scores, haiku_summary, grok_narrative, open_positions=open_positions,
+    )
     logger.info(
         "Opus recommendation: action=%s confidence=%s",
         rec.get("action"),
         rec.get("confidence"),
     )
+
+    # --- Step 2b: Apply Opus position management actions ---
+    manage = rec.get("manage_positions") or []
+    for action in manage:
+        try:
+            pos_id = int(action.get("id"))
+            verb = str(action.get("action", "")).lower()
+            reason = action.get("reason") or "Opus management decision"
+
+            if verb == "close":
+                from shared.position_manager import get_current_price
+                price = get_current_price()
+                if price is None:
+                    continue
+                snap = close_position(pos_id, price, "closed_strategy", notes=reason)
+                if snap:
+                    _publish_position_event("strategy_close", snap)
+        except Exception:
+            logger.exception("Failed to apply manage action: %s", action)
+
+    # --- Step 2c: Open a new position if Opus recommends BUY/SELL with prices ---
+    action = (rec.get("action") or "").upper()
+    side_map = {"BUY": "LONG", "LONG": "LONG", "SELL": "SHORT", "SHORT": "SHORT"}
+    new_side = side_map.get(action)
+    entry = rec.get("entry_price")
+    conf = rec.get("confidence") or 0
+    if new_side and entry is not None:
+        # Confidence floor — skip low-conviction signals to avoid stacking positions
+        if conf < MIN_OPEN_CONFIDENCE:
+            logger.info(
+                "Skipping position open — confidence %.2f below %.2f threshold",
+                conf,
+                MIN_OPEN_CONFIDENCE,
+            )
+        else:
+            # Duplicate-side guard — don't stack positions on the same side
+            existing = list_open_positions()
+            same_side = [p for p in existing if str(p.get("side", "")).upper() == new_side]
+            if same_side:
+                logger.info(
+                    "Skipping position open — already have %d open %s position(s)",
+                    len(same_side),
+                    new_side,
+                )
+            else:
+                try:
+                    new_id = open_position(
+                        side=new_side,
+                        entry_price=float(entry),
+                        stop_loss=rec.get("stop_loss"),
+                        take_profit=rec.get("take_profit"),
+                        notes=(rec.get("analysis_text") or "")[:500],
+                    )
+                    if new_id is not None:
+                        _publish_position_event(
+                            "opened",
+                            {
+                                "id": new_id,
+                                "side": new_side,
+                                "entry_price": float(entry),
+                                "stop_loss": rec.get("stop_loss"),
+                                "take_profit": rec.get("take_profit"),
+                            },
+                        )
+                except Exception:
+                    logger.exception("Failed to open position from recommendation")
 
     # --- Step 3: Publish to Redis stream ---
     event = RecommendationEvent(

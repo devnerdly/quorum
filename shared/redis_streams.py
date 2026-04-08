@@ -11,9 +11,17 @@ import redis
 from shared.config import settings
 
 
+_pool: redis.ConnectionPool | None = None
+
+
 def get_redis() -> redis.Redis:
-    """Return a Redis connection using the configured REDIS_URL."""
-    return redis.Redis.from_url(settings.redis_url, decode_responses=True)
+    """Return a Redis connection from the shared connection pool."""
+    global _pool
+    if _pool is None:
+        _pool = redis.ConnectionPool.from_url(
+            settings.redis_url, decode_responses=True, max_connections=20
+        )
+    return redis.Redis(connection_pool=_pool)
 
 
 def _serialize(obj: Any) -> Any:
@@ -70,11 +78,16 @@ def subscribe(
             block=block,
         )
         if not results:
-            return
+            continue
 
         for _stream, messages in results:
             for msg_id, fields in messages:
-                raw = fields.get("json", "{}")
-                data = json.loads(raw)
+                try:
+                    raw = fields.get("json", "{}")
+                    data = json.loads(raw)
+                    r.xack(stream, group, msg_id)  # ack first — at-most-once
+                except Exception:
+                    # Couldn't even parse, ack and skip
+                    r.xack(stream, group, msg_id)
+                    continue
                 yield msg_id, data
-                r.xack(stream, group, msg_id)

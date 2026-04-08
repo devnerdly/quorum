@@ -37,9 +37,11 @@ def main() -> None:
 
     # Import collectors after DB is initialised (avoids import-time DB calls)
     from collectors.yahoo import collect_and_store as yf_collect
-    from collectors.alpha_vantage import collect_and_store as av_collect
+    from collectors.stooq import collect_and_store as stooq_collect
     from collectors.shipping import collect_and_store as shipping_collect
     from collectors.portwatch import collect_and_store as portwatch_collect
+    from collectors.cot import collect_and_store as cot_collect
+    from collectors.jodi import collect_and_store as jodi_collect
 
     scheduler = BlockingScheduler(timezone="UTC")
 
@@ -52,6 +54,30 @@ def main() -> None:
         args=[yf_collect, "1m", "1d"],
         id="yahoo_1m",
         name="Yahoo 1-minute OHLCV",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # 5-minute bars: run every 5 minutes, fetch last 5 days
+    scheduler.add_job(
+        safe_run,
+        "interval",
+        minutes=5,
+        args=[yf_collect, "5m", "5d"],
+        id="yahoo_5m",
+        name="Yahoo 5-minute OHLCV",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # 15-minute bars: run every 15 minutes, fetch last 5 days
+    scheduler.add_job(
+        safe_run,
+        "interval",
+        minutes=15,
+        args=[yf_collect, "15m", "5d"],
+        id="yahoo_15m",
+        name="Yahoo 15-minute OHLCV",
         max_instances=1,
         coalesce=True,
     )
@@ -80,48 +106,78 @@ def main() -> None:
         coalesce=True,
     )
 
+    # --- Stooq ICE Brent snapshot (matches XTB CFD price) ---
+    scheduler.add_job(
+        safe_run, "interval", minutes=1, args=[stooq_collect],
+        id="stooq_ice_brent", name="Stooq ICE Brent snapshot",
+        max_instances=1, coalesce=True,
+    )
+
     # --- Alpha Vantage jobs ---
-    # 5-minute bars: run every 5 minutes
+    # DISABLED: Alpha Vantage TIME_SERIES_INTRADAY with symbol "BZ" returns
+    # Kanzhun Limited (stock), not Brent crude. AV's BRENT commodity function
+    # only provides monthly/weekly spot — not intraday. Yahoo covers our needs.
+    # scheduler.add_job(..., av_collect, "5min", id="av_5min", ...)
+
+    # --- Macro / fundamental jobs (only the ones that actually work for free) ---
+    from collectors.eia import collect_and_store as eia_collect
+    from collectors.fred import collect_and_store as fred_collect
+
     scheduler.add_job(
-        safe_run,
-        "interval",
-        minutes=5,
-        args=[av_collect, "5min"],
-        id="av_5min",
-        name="Alpha Vantage 5-minute OHLCV",
-        max_instances=1,
-        coalesce=True,
+        safe_run, "interval", hours=6, args=[eia_collect],
+        id="eia", name="EIA crude inventories", max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        safe_run, "interval", hours=12, args=[fred_collect],
+        id="fred", name="FRED macro series", max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        safe_run, "interval", hours=24, args=[cot_collect],
+        id="cot", name="CFTC COT (cftc.gov)", max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        safe_run, "interval", hours=24, args=[jodi_collect],
+        id="jodi", name="JODI Oil World", max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        safe_run, "interval", hours=24, args=[portwatch_collect],
+        id="portwatch", name="IMF PortWatch (ArcGIS)", max_instances=1, coalesce=True,
+    )
+    scheduler.add_job(
+        safe_run, "interval", hours=6, args=[shipping_collect],
+        id="shipping", name="Datalastic AIS (skipped without key)", max_instances=1, coalesce=True,
     )
 
-    # --- Shipping / AIS jobs ---
-    # Tanker positions: every 6 hours
-    scheduler.add_job(
-        safe_run,
-        "interval",
-        hours=6,
-        args=[shipping_collect],
-        id="shipping_ais",
-        name="Datalastic AIS tanker positions",
-        max_instances=1,
-        coalesce=True,
-    )
-
-    # Port congestion: every 24 hours
-    scheduler.add_job(
-        safe_run,
-        "interval",
-        hours=24,
-        args=[portwatch_collect],
-        id="portwatch_congestion",
-        name="IMF PortWatch port congestion",
-        max_instances=1,
-        coalesce=True,
-    )
+    # STILL DISABLED:
+    #   - OPEC MOMR HTML (403 — Cloudflare/Akamai blocks all bot UAs)
+    #     would require headless Playwright + JS execution to bypass.
 
     # Log all scheduled jobs
     logger.info("Scheduled jobs:")
     for job in scheduler.get_jobs():
         logger.info("  • %s (id=%s, trigger=%s)", job.name, job.id, job.trigger)
+
+    # Warm up: immediately fetch all timeframes so the dashboard and analyzer
+    # have data on first load.
+    logger.info("Warming up — fetching 1m, 5m, 15m, 1h, 1d, 1wk Yahoo bars …")
+    safe_run(yf_collect, "1m", "1d")
+    safe_run(yf_collect, "5m", "5d")
+    safe_run(yf_collect, "15m", "5d")
+    safe_run(yf_collect, "1h", "5d")
+    safe_run(yf_collect, "1d", "1mo")
+    safe_run(yf_collect, "1wk", "2y")
+    safe_run(stooq_collect)  # warm up Stooq ICE Brent snapshot
+
+    # Warm up macro / shipping collectors so the analyzer has fundamental
+    # and shipping data on first cycle (instead of waiting hours).
+    logger.info("Warming up macro and shipping collectors …")
+    safe_run(eia_collect)
+    safe_run(fred_collect)
+    safe_run(cot_collect)
+    safe_run(jodi_collect)
+    safe_run(portwatch_collect)
+    safe_run(shipping_collect)
+    logger.info("Warm-up complete.")
 
     logger.info("Starting scheduler …")
     scheduler.start()

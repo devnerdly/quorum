@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     xai_api_key: str = ""
     alpha_vantage_api_key: str = ""
     eia_api_key: str = ""
+    fred_api_key: str = ""
     quandl_api_key: str = ""
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

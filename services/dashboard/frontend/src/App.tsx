@@ -3,6 +3,8 @@ import useApi from "./hooks/useApi";
 import ScoreGauge from "./components/ScoreGauge";
 import PriceChart, { OHLCVBar } from "./components/PriceChart";
 import SignalHistory, { Signal } from "./components/SignalHistory";
+import LogsPanel from "./components/LogsPanel";
+import PositionsPanel from "./components/PositionsPanel";
 
 // ---------------------------------------------------------------------------
 // Types matching the backend JSON
@@ -86,9 +88,18 @@ const App: React.FC = () => {
     { pollInterval: 30_000 }
   );
 
+  // Timeframe selector — poll faster for lower timeframes
+  const [timeframe, setTimeframe] = useState<string>("1min");
+  const pollInterval =
+    timeframe === "1min" ? 3_000
+    : timeframe === "5min" ? 10_000
+    : timeframe === "15min" ? 30_000
+    : timeframe === "1H" ? 60_000
+    : 300_000;
+
   const { data: ohlcv, loading: ohlcvLoading } = useApi<OHLCVBar[]>(
-    "/api/ohlcv?timeframe=1H&limit=200",
-    { pollInterval: 60_000 }
+    `/api/ohlcv?timeframe=${timeframe}&limit=300`,
+    { pollInterval }
   );
 
   // Live score override from WebSocket
@@ -156,17 +167,47 @@ const App: React.FC = () => {
 
       {/* Price Chart */}
       <section className="mb-6">
+        {/* Timeframe tabs */}
+        <div className="flex items-center gap-1 mb-2">
+          {["1min", "5min", "15min", "1H", "1D", "1W"].map((tf) => (
+            <button
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              className={`px-3 py-1 text-xs rounded font-medium transition ${
+                timeframe === tf
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+              }`}
+            >
+              {tf}
+            </button>
+          ))}
+          <span className="ml-auto text-[10px] text-gray-600">
+            {timeframe === "1min"
+              ? "Refreshing every 3s"
+              : timeframe === "5min"
+              ? "Refreshing every 10s"
+              : timeframe === "15min"
+              ? "Refreshing every 30s"
+              : "Refreshing every 1-5min"}
+          </span>
+        </div>
         {ohlcvLoading && (!ohlcv || ohlcv.length === 0) ? (
           <div className="bg-gray-900 rounded-xl p-4 h-40 flex items-center justify-center text-gray-600 text-sm">
             Loading chart…
           </div>
         ) : (
-          <PriceChart bars={ohlcv ?? []} timeframe="1H" />
+          <PriceChart key={timeframe} bars={ohlcv ?? []} timeframe={timeframe} />
         )}
       </section>
 
+      {/* Open Positions */}
+      <section className="mb-6">
+        <PositionsPanel />
+      </section>
+
       {/* Signal History */}
-      <section>
+      <section className="mb-6">
         <h2 className="text-xs uppercase tracking-widest text-gray-500 mb-3">
           Signal History
         </h2>
@@ -175,6 +216,11 @@ const App: React.FC = () => {
         ) : (
           <SignalHistory signals={signals ?? []} />
         )}
+      </section>
+
+      {/* Live Logs */}
+      <section>
+        <LogsPanel />
       </section>
     </div>
   );

@@ -9,6 +9,6 @@ COPY shared/ /app/shared/
 COPY services/analyzer/ /app/
 
 # Install dependencies (shared is installed via file:// path in requirements.txt)
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --pre -r requirements.txt
 
 CMD ["python", "main.py"]

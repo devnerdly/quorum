@@ -10,12 +10,14 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Timeframe weights for multi-timeframe aggregation
+# Timeframe weights for multi-timeframe aggregation.
+# The analyzer currently computes scores for 1H, 1D, and 1W only
+# (no 5min/15min/4H timeframes from the collector).
+# Weight 1H heavily for responsiveness in the 15-min trading cycle.
 TIMEFRAME_WEIGHTS: dict[str, float] = {
-    "1H": 0.20,
-    "4H": 0.30,
+    "1H": 0.55,
     "1D": 0.35,
-    "1W": 0.15,
+    "1W": 0.10,
 }
 
 
@@ -265,7 +267,8 @@ def _compute_indicators_for_df(df: pd.DataFrame) -> float | None:
 def compute_technical_score() -> float | None:
     """Multi-timeframe technical score.
 
-    Timeframe weights: 1H=0.20, 4H=0.30, 1D=0.35, 1W=0.15.
+    Timeframe weights: 1H=0.55, 1D=0.35, 1W=0.10.
+    Only 1H, 1D, and 1W are computed (no 4H or shorter timeframes from collector).
     Returns a single score in [-100, 100] or None if no data available.
     """
     total_weight = 0.0

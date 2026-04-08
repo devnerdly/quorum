@@ -6,6 +6,7 @@ import logging
 from datetime import timezone
 
 import yfinance as yf
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from shared.models.base import SessionLocal
 from shared.models.ohlcv import OHLCV
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 INTERVAL_MAP: dict[str, str] = {
     "1m": "1min",
     "5m": "5min",
+    "15m": "15min",
     "1h": "1H",
     "1d": "1D",
     "1wk": "1W",
@@ -87,22 +89,25 @@ def collect_and_store(interval: str = "1h", period: str = "1d") -> None:
     if not records:
         return
 
+    # Upsert by (source, timeframe, timestamp). For existing bars we refresh
+    # open/high/low/close/volume because the current (unfinished) bar will
+    # change until it closes.
     with SessionLocal() as session:
-        for rec in records:
-            row = OHLCV(
-                timestamp=rec["timestamp"],
-                source=rec["source"],
-                timeframe=rec["timeframe"],
-                open=rec["open"],
-                high=rec["high"],
-                low=rec["low"],
-                close=rec["close"],
-                volume=rec["volume"],
-            )
-            session.add(row)
+        stmt = pg_insert(OHLCV).values(records)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["source", "timeframe", "timestamp"],
+            set_={
+                "open": stmt.excluded.open,
+                "high": stmt.excluded.high,
+                "low": stmt.excluded.low,
+                "close": stmt.excluded.close,
+                "volume": stmt.excluded.volume,
+            },
+        )
+        session.execute(stmt)
         session.commit()
 
-    logger.info("Stored %d OHLCV rows (interval=%s)", len(records), interval)
+    logger.info("Upserted %d OHLCV rows (interval=%s)", len(records), interval)
 
     # Publish the most recent bar as a PriceEvent
     latest = records[-1]

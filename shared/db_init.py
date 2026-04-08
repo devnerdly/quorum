@@ -49,6 +49,29 @@ def init_db() -> None:
 
     with engine.connect() as conn:
         for table in _HYPERTABLES:
+            # TimescaleDB requires the partitioning column (timestamp) to be
+            # part of any unique index/primary key. Our SQLAlchemy models use
+            # `id` as the PK, so we need to convert it to a composite PK
+            # (id, timestamp) before calling create_hypertable.
+            logger.info("Adjusting primary key on: %s", table)
+            try:
+                # Check if PK already includes timestamp — skip if so.
+                result = conn.execute(text(f"""
+                    SELECT a.attname FROM pg_index i
+                    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                    WHERE i.indrelid = '{table}'::regclass AND i.indisprimary
+                """)).fetchall()
+                pk_columns = {r[0] for r in result}
+                if "timestamp" in pk_columns:
+                    logger.debug("PK on %s already includes timestamp, skipping", table)
+                else:
+                    conn.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_pkey;"))
+                    conn.execute(text(f"ALTER TABLE {table} ADD PRIMARY KEY (id, timestamp);"))
+                    conn.commit()
+            except Exception as exc:
+                logger.warning("PK adjust for %s skipped: %s", table, exc)
+                conn.rollback()
+
             # create_hypertable raises an error if the table is already a
             # hypertable, so we use if_not_exists => TRUE.
             logger.info("Creating hypertable: %s", table)

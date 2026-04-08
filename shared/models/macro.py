@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import mapped_column, Mapped
 
 from shared.models.base import Base
@@ -52,6 +52,9 @@ class MacroFRED(Base):
     """Federal Reserve Economic Data time series values."""
 
     __tablename__ = "macro_fred"
+    __table_args__ = (
+        UniqueConstraint("series_id", "timestamp", name="uq_macro_fred_series_ts"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

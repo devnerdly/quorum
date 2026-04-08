@@ -4,6 +4,8 @@ from shared.models.macro import MacroEIA, MacroCOT, MacroFRED, MacroJODI, MacroO
 from shared.models.sentiment import SentimentNews, SentimentTwitter
 from shared.models.signals import AnalysisScore, AIRecommendation
 from shared.models.shipping import ShippingPosition, ShippingMetric
+from shared.models.positions import Position
+from shared.models.knowledge import KnowledgeSummary
 
 __all__ = [
     "Base",
@@ -21,4 +23,6 @@ __all__ = [
     "AIRecommendation",
     "ShippingPosition",
     "ShippingMetric",
+    "Position",
+    "KnowledgeSummary",
 ]

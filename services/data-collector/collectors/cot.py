@@ -1,14 +1,20 @@
-"""CFTC Commitment of Traders (COT) collector for crude oil futures."""
+"""CFTC Commitment of Traders (COT) collector for Brent crude oil futures.
+
+Scrapes the public CFTC weekly disaggregated futures-only report directly from
+cftc.gov (no API key needed). The Quandl/Nasdaq endpoint that this used to hit
+became paywalled, so we now parse the raw fixed-format text feed.
+"""
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
 import requests
 
-from shared.config import settings
 from shared.models.base import SessionLocal
 from shared.models.macro import MacroCOT
 from shared.redis_streams import publish
@@ -16,65 +22,69 @@ from shared.schemas.events import MacroEvent
 
 logger = logging.getLogger(__name__)
 
-# Nasdaq Data Link (formerly Quandl) COT dataset for WTI crude oil futures (067651)
-_COT_URL = "https://data.nasdaq.com/api/v3/datasets/CFTC/067651_F_ALL.json"
+# Free public CFTC feed — futures only, "short format" CSV-like text dump.
+# Updated weekly on Friday afternoon ET with prior Tuesday's positions.
+_CFTC_URL = "https://www.cftc.gov/dea/newcot/deafut.txt"
 _STREAM = "macro.cot"
 
-# Column indices in the Nasdaq dataset (0-based, after the "Date" column at index 0)
-# Columns (from CFTC/Quandl CFTC_F_ALL layout):
-#   0: Date
-#   1: Open Interest
-#   2: Noncommercial Long
-#   3: Noncommercial Short
-#   4: Noncommercial Spreading
-#   5: Commercial Long
-#   6: Commercial Short
-#   7: Total Long
-#   8: Total Short
-#   9: Nonreportable Long
-#  10: Nonreportable Short
-_COL_DATE = 0
-_COL_OPEN_INTEREST = 1
-_COL_NC_LONG = 2
-_COL_NC_SHORT = 3
-_COL_C_LONG = 5
-_COL_C_SHORT = 6
+# CFTC contract code for ICE Brent Crude futures (NYMEX-listed Brent Last Day).
+# (WTI on ICE Europe = "067411", Brent Last Day on NYMEX = "06765T".)
+_BRENT_CONTRACT_CODE = "06765T"
+# Fallback: WTI light sweet crude on NYMEX (most liquid crude oil contract).
+# Brent and WTI move in tight correlation so this is a fine proxy if Brent is missing.
+_WTI_CONTRACT_CODE = "067651"
+
+# Column indices in the cftc.gov fixed-format file (0-based, after the
+# contract name field at index 0). The format has 95+ columns; we only need:
+#   1: yymmdd date
+#   2: YYYY-MM-DD date  ← we use this
+#   3: CFTC contract code
+#   7: Open Interest (Total)
+#   8: Non-Commercial Long
+#   9: Non-Commercial Short
+#  10: Non-Commercial Spreading
+#  11: Commercial Long
+#  12: Commercial Short
+_COL_DATE = 2
+_COL_CONTRACT_CODE = 3
+_COL_OPEN_INTEREST = 7
+_COL_NC_LONG = 8
+_COL_NC_SHORT = 9
+_COL_C_LONG = 11
+_COL_C_SHORT = 12
 
 
-def parse_cot_row(row: list[Any]) -> dict[str, Any]:
-    """Extract COT fields from a single data row.
-
-    Args:
-        row: A list from the Nasdaq dataset ``data`` array.  The first element
-             is the date string; remaining elements are numeric columns.
-
-    Returns:
-        Dict with keys: ``report_date``, ``commercial_long``,
-        ``commercial_short``, ``non_commercial_long``,
-        ``non_commercial_short``, ``open_interest``,
-        ``commercial_net``, ``non_commercial_net``.
-    """
-    def _float(val: Any) -> float | None:
-        try:
-            return float(val) if val is not None else None
-        except (TypeError, ValueError):
-            return None
-
+def _to_float(val: Any) -> float | None:
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s:
+        return None
     try:
-        report_date = datetime.strptime(str(row[_COL_DATE]), "%Y-%m-%d").replace(
-            tzinfo=timezone.utc
-        )
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_cot_row(row: list[str]) -> dict[str, Any]:
+    """Extract relevant COT fields from one cftc.gov row."""
+    try:
+        report_date = datetime.strptime(row[_COL_DATE], "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except (IndexError, ValueError):
         report_date = None
 
-    c_long = _float(row[_COL_C_LONG]) if len(row) > _COL_C_LONG else None
-    c_short = _float(row[_COL_C_SHORT]) if len(row) > _COL_C_SHORT else None
-    nc_long = _float(row[_COL_NC_LONG]) if len(row) > _COL_NC_LONG else None
-    nc_short = _float(row[_COL_NC_SHORT]) if len(row) > _COL_NC_SHORT else None
-    open_interest = _float(row[_COL_OPEN_INTEREST]) if len(row) > _COL_OPEN_INTEREST else None
+    c_long = _to_float(row[_COL_C_LONG]) if len(row) > _COL_C_LONG else None
+    c_short = _to_float(row[_COL_C_SHORT]) if len(row) > _COL_C_SHORT else None
+    nc_long = _to_float(row[_COL_NC_LONG]) if len(row) > _COL_NC_LONG else None
+    nc_short = _to_float(row[_COL_NC_SHORT]) if len(row) > _COL_NC_SHORT else None
+    open_interest = _to_float(row[_COL_OPEN_INTEREST]) if len(row) > _COL_OPEN_INTEREST else None
 
-    commercial_net = (c_long - c_short) if c_long is not None and c_short is not None else None
-    non_commercial_net = (nc_long - nc_short) if nc_long is not None and nc_short is not None else None
+    commercial_net = (
+        c_long - c_short if c_long is not None and c_short is not None else None
+    )
+    non_commercial_net = (
+        nc_long - nc_short if nc_long is not None and nc_short is not None else None
+    )
 
     return {
         "report_date": report_date,
@@ -89,30 +99,39 @@ def parse_cot_row(row: list[Any]) -> dict[str, Any]:
 
 
 def fetch_cot() -> dict[str, Any]:
-    """Fetch the most recent COT report row from Nasdaq Data Link.
-
-    Returns:
-        Parsed dict from :func:`parse_cot_row` for the latest report.
-    """
-    params: dict[str, Any] = {
-        "rows": 1,  # only the latest record
-    }
-    if settings.quandl_api_key:
-        params["api_key"] = settings.quandl_api_key
-
-    logger.info("Fetching COT data from %s", _COT_URL)
-    response = requests.get(_COT_URL, params=params, timeout=30)
+    """Download cftc.gov text feed and return Brent (or WTI fallback) row."""
+    logger.info("Fetching CFTC COT data from %s", _CFTC_URL)
+    response = requests.get(_CFTC_URL, timeout=60)
     response.raise_for_status()
 
-    payload = response.json()
-    dataset = payload.get("dataset", {})
-    data_rows = dataset.get("data", [])
+    text = response.text
+    reader = csv.reader(io.StringIO(text), quotechar='"', skipinitialspace=True)
 
-    if not data_rows:
-        logger.warning("COT response contained no data rows")
-        return {}
+    brent_row: dict[str, Any] | None = None
+    wti_row: dict[str, Any] | None = None
 
-    return parse_cot_row(data_rows[0])
+    for row in reader:
+        if len(row) <= _COL_CONTRACT_CODE:
+            continue
+        code = row[_COL_CONTRACT_CODE].strip()
+        if code == _BRENT_CONTRACT_CODE and brent_row is None:
+            brent_row = parse_cot_row(row)
+        elif code == _WTI_CONTRACT_CODE and wti_row is None:
+            wti_row = parse_cot_row(row)
+
+    if brent_row:
+        logger.info("Using Brent COT contract code %s", _BRENT_CONTRACT_CODE)
+        return brent_row
+    if wti_row:
+        logger.warning(
+            "Brent COT contract %s not found — falling back to WTI %s",
+            _BRENT_CONTRACT_CODE,
+            _WTI_CONTRACT_CODE,
+        )
+        return wti_row
+
+    logger.warning("No matching crude oil rows found in CFTC feed")
+    return {}
 
 
 def collect_and_store() -> None:
@@ -138,7 +157,11 @@ def collect_and_store() -> None:
         session.add(row)
         session.commit()
 
-    logger.info("Stored MacroCOT record (report_date=%s)", data.get("report_date"))
+    logger.info(
+        "Stored MacroCOT row (report_date=%s, nc_net=%s)",
+        data.get("report_date"),
+        data.get("non_commercial_net"),
+    )
 
     event = MacroEvent(timestamp=now, dataset="cot", data=data)
     publish(_STREAM, event.model_dump())

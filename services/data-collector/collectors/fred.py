@@ -8,6 +8,8 @@ from typing import Any
 
 import requests
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from shared.config import settings
 from shared.models.base import SessionLocal
 from shared.models.macro import MacroFRED
@@ -28,56 +30,57 @@ FRED_SERIES: list[str] = [
 ]
 
 
-def parse_fred_series(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Parse FRED API observations response and return the latest observation.
+def parse_fred_series(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Parse FRED API observations response and return all parsed points.
 
     Args:
         data: Parsed JSON response from the FRED observations endpoint.
 
     Returns:
-        Dict with keys ``date`` (datetime) and ``value`` (float | None),
-        or ``None`` if no observations are present.
+        List of dicts with keys ``date`` (datetime) and ``value`` (float | None),
+        sorted ascending by date. Empty list if no observations.
     """
     observations = data.get("observations", [])
     if not observations:
         logger.warning("FRED response contained no observations")
-        return None
+        return []
 
-    # Observations are returned in ascending date order; take the last one
-    latest = observations[-1]
-    raw_value = latest.get("value", ".")
-    try:
-        value = float(raw_value) if raw_value != "." else None
-    except (TypeError, ValueError):
-        value = None
+    parsed: list[dict[str, Any]] = []
+    for obs in observations:
+        raw_value = obs.get("value", ".")
+        try:
+            value = float(raw_value) if raw_value != "." else None
+        except (TypeError, ValueError):
+            value = None
+        try:
+            date = datetime.strptime(obs["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            continue
+        if value is None:
+            continue
+        parsed.append({"date": date, "value": value})
 
-    try:
-        date = datetime.strptime(latest["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except (KeyError, ValueError):
-        date = datetime.now(tz=timezone.utc)
-
-    return {"date": date, "value": value}
+    parsed.sort(key=lambda r: r["date"])
+    return parsed
 
 
-def fetch_fred_series(series_id: str) -> dict[str, Any] | None:
-    """Fetch the latest observation for a single FRED series.
+def fetch_fred_series(series_id: str, limit: int = 30) -> list[dict[str, Any]]:
+    """Fetch recent observations for a single FRED series.
 
     Args:
         series_id: FRED series identifier (e.g. ``"FEDFUNDS"``).
+        limit: Number of observations to fetch (newest first from API).
 
     Returns:
-        Dict with ``date`` and ``value`` keys, or ``None`` on failure.
+        List of {date, value} dicts sorted ascending by date.
     """
-    # FRED uses api_key as a query parameter.
-    # We support a dedicated FRED key via FRED_API_KEY env var, falling back to quandl key.
-    fred_key = getattr(settings, "fred_api_key", None) or settings.quandl_api_key or "no_key"
+    fred_key = getattr(settings, "fred_api_key", "") or settings.quandl_api_key or "no_key"
     params = {
         "series_id": series_id,
         "api_key": fred_key,
         "file_type": "json",
         "sort_order": "desc",
-        "limit": 1,
-        "observation_start": "2000-01-01",
+        "limit": limit,
     }
 
     logger.info("Fetching FRED series %s", series_id)
@@ -87,32 +90,37 @@ def fetch_fred_series(series_id: str) -> dict[str, Any] | None:
 
 
 def collect_and_store() -> None:
-    """Fetch all configured FRED series, persist to DB, publish MacroEvents."""
+    """Fetch all configured FRED series, persist all observations, publish MacroEvents."""
     now = datetime.now(tz=timezone.utc)
-    all_data: dict[str, Any] = {}
+    summary: dict[str, Any] = {}
 
     with SessionLocal() as session:
         for series_id in FRED_SERIES:
             try:
-                result = fetch_fred_series(series_id)
+                points = fetch_fred_series(series_id)
             except Exception as exc:
                 logger.error("Failed to fetch FRED series %s: %s", series_id, exc)
                 continue
 
-            if result is None:
+            if not points:
                 continue
 
-            row = MacroFRED(
-                timestamp=now,
-                series_id=series_id,
-                value=result["value"],
+            rows = [
+                {"timestamp": p["date"], "series_id": series_id, "value": p["value"]}
+                for p in points
+            ]
+            stmt = pg_insert(MacroFRED).values(rows).on_conflict_do_nothing(
+                index_elements=["series_id", "timestamp"]
             )
-            session.add(row)
-            all_data[series_id] = result["value"]
-            logger.info("Stored MacroFRED %s = %s", series_id, result["value"])
+            session.execute(stmt)
+
+            latest = points[-1]
+            summary[series_id] = latest["value"]
+            logger.info("Upserted %d MacroFRED rows for %s (latest=%s)",
+                        len(points), series_id, latest["value"])
 
         session.commit()
 
-    event = MacroEvent(timestamp=now, dataset="fred", data=all_data)
+    event = MacroEvent(timestamp=now, dataset="fred", data=summary)
     publish(_STREAM, event.model_dump())
-    logger.info("Published MacroEvent to stream '%s' (%d series)", _STREAM, len(all_data))
+    logger.info("Published MacroEvent to stream '%s' (%d series)", _STREAM, len(summary))

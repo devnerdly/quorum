@@ -48,7 +48,7 @@ const PriceChart: React.FC<PriceChartProps> = ({ bars, timeframe = "1H" }) => {
       timeScale: {
         borderColor: "#374151",
         timeVisible: true,
-        secondsVisible: false,
+        secondsVisible: true,
       },
       width: containerRef.current.clientWidth,
       height: 380,
