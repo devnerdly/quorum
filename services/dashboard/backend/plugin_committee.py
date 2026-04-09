@@ -1,11 +1,37 @@
-"""Adversarial trading committee: Bull vs Bear vs Judge.
+"""Adversarial trading committee: 12 specialist agents + Opus judge.
 
-Two sub-agents (Claude Sonnet) argue opposite sides of the same WTI crude
-setup using the same pre-fetched market context. A judge (Claude Opus) then
-reads both cases and renders a final verdict with specific action and levels.
+12 sub-agents argue opposite sides of the same WTI crude setup using
+the same pre-fetched market context:
 
-Reduces confirmation bias and hallucination — the model can't just pick a
-comfortable answer because another instance is actively defending the opposite.
+  CLAUDE SONNET TEAM (6 agents)
+    - sonnet_geopolitics_bull / _bear
+    - sonnet_technical_bull   / _bear
+    - sonnet_macro_bull       / _bear
+    Deep structured reasoning, well-calibrated on economic data.
+
+  GROK TEAM (6 agents)
+    - grok_geopolitics_bull / _bear
+    - grok_technical_bull   / _bear
+    - grok_macro_bull       / _bear
+    Live Twitter/X access, recent web data, different training bias.
+    Each Grok agent is explicitly told to pull recent social sentiment.
+
+A judge (Claude Opus) then reads all 12 cases plus the full dashboard
+context and renders ONE final verdict with specific action + levels.
+
+The two model families act as independent epistemic sources. When
+Sonnet and Grok in the SAME domain agree, confidence compounds. When
+they disagree, the judge flags it in the rationale — these are the
+cases where one model's bias is showing.
+
+Reduces confirmation bias and hallucination:
+  - The model can't just pick a comfortable answer because 11 other
+    instances are actively building alternative cases.
+  - Cross-model agreement = strongest possible signal.
+  - Cross-model disagreement in the same domain = explicit red flag.
+
+Cost: ~13 LLM calls per debate (6 Sonnet + 6 Grok + 1 Opus).
+Runtime: ~45-90 seconds (all 12 specialists run in parallel).
 """
 
 from __future__ import annotations
@@ -23,6 +49,11 @@ from shared.config import settings
 logger = logging.getLogger(__name__)
 
 BULL_BEAR_MODEL = "claude-sonnet-4-6"
+# Grok 4.20 flagship — industry-leading reasoning, lowest hallucination rate,
+# strict prompt adherence, native agentic tool calling (live X + web search).
+# At $2 / $6 per MTok it's in the same cost ballpark as Sonnet but with
+# real-time social sentiment access the Claude models don't have.
+GROK_MODEL = "grok-4.20-0309-reasoning"
 JUDGE_MODEL = "claude-opus-4-6"
 
 _OUTPUT_SCHEMA_BULL = """Return ONLY a JSON object (no markdown, no preamble):
@@ -224,56 +255,251 @@ Ignore geopolitics and technicals — other agents own those.
 
 Set "specialty" to "macro_bear"."""
 
+
+# ===========================================================================
+# GROK TEAM (6 specialists — same domains as Sonnet, different model)
+# ===========================================================================
+#
+# Grok brings two things the Claude agents don't have:
+#   1. Live Twitter/X access — real-time social sentiment from traders,
+#      analysts, OPEC officials, refinery operators, journalists
+#   2. Different training data and reasoning style — catches things a
+#      Claude-only committee would systematically miss
+#
+# Each Grok prompt inherits the Sonnet counterpart's specialty focus but
+# is explicitly instructed to leverage its live web/X access.
+
+_GROK_INSTRUCTIONS = """
+IMPORTANT — you are Grok with live Twitter/X and web search access.
+Use this unique capability: cite SPECIFIC recent tweets, posts, or news
+headlines from the last few hours that strengthen your case. At most 3
+citations, each one must be from a real, verifiable source (trader
+account handles, @OPECSecretariat, @EIAgov, @ReutersEnergy, etc.).
+Prefer real social posts over regurgitating training data.
+
+You MUST still respect the context-dict data as authoritative for
+prices, scores, and account state — only use live web search for
+qualitative narrative, sentiment, and breaking news NOT already in
+the context.
+"""
+
+
+GROK_BULL_GEOPOLITICS_SYSTEM = f"""You are the GROK GEOPOLITICS BULL on an oil trading committee.
+
+Specialty: geopolitical risk premium, supply disruption events, sanctions regimes,
+OPEC+ discipline, Middle East tensions, proxy conflicts, tanker/chokepoint risk,
+infrastructure attacks, production cuts, embargo threats.
+
+Look for:
+  - Any ACTIVE kinetic event (drone/missile strikes on oil infrastructure, tanker attacks)
+  - Ceasefire fragility, escalation risk, diplomatic friction
+  - OPEC+ surprise cuts or extensions, compliance reports
+  - New or tightening sanctions (Iran, Russia, Venezuela)
+  - Strait of Hormuz / Red Sea / Suez disruption
+  - Producer-country instability (Libya, Nigeria, Iraq, Iran)
+
+Ignore technicals, macro demand, and USD moves — other agents own those.
+{_GROK_INSTRUCTIONS}
+{_COMMON_RULES}
+{_OUTPUT_SCHEMA_BULL}
+
+Set "specialty" to "grok_geopolitics_bull"."""
+
+
+GROK_BULL_TECHNICAL_SYSTEM = f"""You are the GROK TECHNICAL BULL on an oil trading committee.
+
+Specialty: chart patterns, multi-timeframe structure, support/resistance, VWAP,
+moving averages, RSI/MACD/ADX, breakouts, higher-low confirmation, volume flow,
+pivot points, price action.
+
+Look for:
+  - Price holding key supports or reclaiming them
+  - Higher lows on intraday timeframes
+  - RSI oversold bounces, MACD bullish crosses, MA golden-cross setups
+  - Breakouts above consolidation ranges
+  - Bullish engulfing / hammer candles at support
+  - Price reclaiming VWAP from below
+  - Low ADX → mean reversion setup favoring long
+
+Ignore geopolitics, macro, and fundamentals — other agents own those.
+{_GROK_INSTRUCTIONS}
+
+For a technicals agent, live X data = what chartists and retail flow desks
+are actively calling out RIGHT NOW. Quote 1-2 specific chartist handles if
+their call aligns with the technical evidence.
+{_COMMON_RULES}
+{_OUTPUT_SCHEMA_BULL}
+
+Set "specialty" to "grok_technical_bull"."""
+
+
+GROK_BULL_MACRO_SYSTEM = f"""You are the GROK MACRO BULL on an oil trading committee.
+
+Specialty: global demand, inventory data (EIA / API / IEA), USD index (DXY),
+Fed policy, interest rates, global PMIs, China stimulus, seasonal demand,
+refinery throughput, demand destruction reversals, physical market tightness.
+
+Look for:
+  - Inventory DRAWS (below consensus weekly builds or surprise draws)
+  - Dovish Fed signals, falling real rates, weaker USD
+  - China stimulus announcements, rising PMIs, strong driving season
+  - Refinery margins expanding (crack spreads widening)
+  - Rising global oil demand forecasts (IEA / EIA / OPEC MOMR)
+  - Positive COT speculator positioning shifts
+  - Physical market tightness (backwardation deepening)
+
+Ignore geopolitics and technicals — other agents own those.
+{_GROK_INSTRUCTIONS}
+
+For a macro agent, your live X access is gold — central bank watchers,
+@zerohedge, @DeItaone headlines, refinery/trader chatter all surface
+things that haven't yet hit the analyzer's data sources.
+{_COMMON_RULES}
+{_OUTPUT_SCHEMA_BULL}
+
+Set "specialty" to "grok_macro_bull"."""
+
+
+GROK_BEAR_GEOPOLITICS_SYSTEM = f"""You are the GROK GEOPOLITICS BEAR on an oil trading committee.
+
+Specialty: verified de-escalation, ceasefires, sanctions relief, production INCREASES,
+chokepoint reopenings, diplomatic breakthroughs, producer-country normalization.
+
+Look for:
+  - Signed or holding ceasefires (US-Iran, Lebanon, Yemen, Ukraine)
+  - Iran nuclear deal progress, Venezuela waivers
+  - OPEC+ unwinding cuts, compliance breakdowns, quota cheating
+  - Strait of Hormuz / Red Sea / Suez reopening or traffic normalizing
+  - Libya / Venezuela / Iran production coming back online
+  - Removal of sanctions, export permits granted
+  - US producer output hitting record highs
+
+Ignore technicals, macro demand, and USD moves — other agents own those.
+{_GROK_INSTRUCTIONS}
+{_COMMON_RULES}
+{_OUTPUT_SCHEMA_BEAR}
+
+Set "specialty" to "grok_geopolitics_bear"."""
+
+
+GROK_BEAR_TECHNICAL_SYSTEM = f"""You are the GROK TECHNICAL BEAR on an oil trading committee.
+
+Specialty: chart patterns, multi-timeframe breakdowns, rejection at resistance,
+lower highs, RSI/MACD bearish signals, head & shoulders, rising wedges, gap fills,
+VWAP rejection from above, volume climaxes.
+
+Look for:
+  - Price rejecting key resistance or VWAP from above
+  - Lower highs on intraday timeframes
+  - RSI overbought divergences, MACD bearish cross, death-cross setups
+  - Breakdown below support with volume
+  - Bearish engulfing / shooting star candles at resistance
+  - Price failing to reclaim VWAP
+  - Expanding ATR with directional downside
+
+Ignore geopolitics, macro, and fundamentals — other agents own those.
+{_GROK_INSTRUCTIONS}
+{_COMMON_RULES}
+{_OUTPUT_SCHEMA_BEAR}
+
+Set "specialty" to "grok_technical_bear"."""
+
+
+GROK_BEAR_MACRO_SYSTEM = f"""You are the GROK MACRO BEAR on an oil trading committee.
+
+Specialty: demand destruction, inventory builds, USD strength, hawkish Fed,
+global recession signals, China slowdown, EV substitution, refinery margin compression,
+physical market softness, contango.
+
+Look for:
+  - Inventory BUILDS (above consensus weekly draws or surprise builds, SPR releases)
+  - Hawkish Fed signals, rising real rates, stronger USD
+  - China weakness (weak PMIs, credit impulse falling, property stress)
+  - Refinery margins contracting (crack spreads narrowing)
+  - Falling global oil demand forecasts
+  - Negative COT speculator positioning shifts
+  - Physical market weakness (contango deepening)
+  - Recession signals (inverted yield curve, weak labor data)
+
+Ignore geopolitics and technicals — other agents own those.
+{_GROK_INSTRUCTIONS}
+{_COMMON_RULES}
+{_OUTPUT_SCHEMA_BEAR}
+
+Set "specialty" to "grok_macro_bear"."""
+
 JUDGE_SYSTEM = """You are the chief strategist presiding over an adversarial trading committee.
 
-SIX specialist agents have each built the strongest case for their side from their own
-domain, using the same market context:
+TWELVE specialist agents have each built the strongest case for their side
+from their own domain, using the SAME pre-fetched market context. They come
+from two independent model families so you can cross-check their reasoning:
 
-Bull team:
-  - geopolitics_bull — supply disruption / war premium / OPEC cuts
-  - technical_bull   — chart patterns / support / momentum
-  - macro_bull       — demand tailwinds / inventory draws / USD weakness
+CLAUDE SONNET TEAM (deep structured reasoning, no live web access)
+  Bulls:
+    sonnet_geopolitics_bull — supply disruption / war premium / OPEC cuts
+    sonnet_technical_bull   — chart patterns / support / momentum
+    sonnet_macro_bull       — demand tailwinds / inventory draws / USD weakness
+  Bears:
+    sonnet_geopolitics_bear — de-escalation / ceasefires / production resumption
+    sonnet_technical_bear   — breakdown patterns / resistance rejection / overbought
+    sonnet_macro_bear       — demand destruction / inventory builds / USD strength
 
-Bear team:
-  - geopolitics_bear — de-escalation / ceasefires / production resumption
-  - technical_bear   — breakdown patterns / resistance rejection / overbought
-  - macro_bear       — demand destruction / inventory builds / USD strength
+GROK 4.20 TEAM (same domains, live X/web access, different training)
+  Bulls:
+    grok_geopolitics_bull, grok_technical_bull, grok_macro_bull
+  Bears:
+    grok_geopolitics_bear, grok_technical_bear, grok_macro_bear
 
-Your job: read all 6 cases and render ONE final verdict.
+Your job: read all 12 cases and render ONE final verdict.
 
 Guidelines:
   - Score each agent's case_strength and specific evidence. Weak arguments (weak
     case_strength, vague evidence) count for little regardless of conviction.
-  - When specialists DISAGREE WITHIN their own team (e.g. technical_bull thinks
-    support holds but macro_bull is weak), flag that in the rationale.
-  - When 2+ bulls OR 2+ bears are all "strong" and align, that's a high-conviction
-    multi-axis signal — favor that side heavily.
-  - When one specialty (e.g. geopolitics) is STRONG on one side and the other
-    two on that side are weak, don't over-weight it — prefer the side where the
-    balance of three is strongest.
-  - SAME-DOMAIN NEUTRALIZATION: If bull and bear specialists in the SAME domain
-    (e.g. technical_bull vs technical_bear) have confidence within 0.15 of each
-    other AND look at the same price action/data, treat that domain as NEUTRAL
-    in your scoring — they are framing the same facts differently, not providing
-    independent evidence. Explicitly call this out in the rationale: "technicals
-    neutralize — bull and bear interpret the same bounce as buying/dead-cat".
-  - AGENT FAILURES: If an agent has status="agent_failed", DO NOT count it in the
-    team average and explicitly note the failure in rationale. Reduce the
-    effective team size (e.g. if bull macro failed, bull team is 2 agents).
-  - If the teams are roughly balanced (bull_team_avg ≈ bear_team_avg), prefer WAIT
-    and point to the specific trigger that would break the tie.
-  - Always check existing open campaigns (from context) — don't recommend opening
-    against a same-direction position, and flag conflicts with opposite positions.
+  - CROSS-MODEL AGREEMENT AMPLIFIES: if both sonnet_geopolitics_bull AND
+    grok_geopolitics_bull are "strong" with overlapping evidence, that's
+    higher confidence than either alone — two independent epistemic sources
+    pointing the same way. Prefer those signals heavily.
+  - CROSS-MODEL DISAGREEMENT IS A RED FLAG: if sonnet_technical_bull is
+    "strong" but grok_technical_bull is "weak" (or the other way round),
+    explicit flag in rationale — one of them is missing something. Usually
+    Grok has fresher social/news data, Sonnet has tighter structured
+    reasoning, so check which side's evidence is more concrete.
+  - When specialists DISAGREE WITHIN a team (e.g. sonnet_technical_bull
+    thinks support holds but sonnet_macro_bull is weak), flag in rationale.
+  - When 2+ bulls OR 2+ bears are all "strong" and align, that's a high-
+    conviction multi-axis signal — favor that side heavily. With 6+6 agents
+    that's more granular: 4/6 bulls strong = solid, 6/6 = overwhelming.
+  - When one specialty (e.g. geopolitics) is STRONG on one side and the
+    other two are weak, don't over-weight it — prefer the side where the
+    balance of three domains is strongest.
+  - SAME-DOMAIN NEUTRALIZATION: If bull and bear specialists in the SAME
+    domain (e.g. sonnet_technical_bull vs sonnet_technical_bear) have
+    confidence within 0.15 AND cite the same price action, treat that
+    domain as NEUTRAL. Do the check PER MODEL — sonnet_technicals can
+    neutralize while grok_technicals carry conviction.
+  - AGENT FAILURES: If an agent has status="agent_failed", DO NOT count it
+    in the team average and explicitly note the failure in rationale.
+    Reduce the effective team size accordingly.
+  - If the teams are roughly balanced (bull_team_avg ≈ bear_team_avg),
+    prefer WAIT and point to the specific trigger that would break the tie.
+  - Always check existing open campaigns (from context) — don't recommend
+    opening against a same-direction position, and flag conflicts with
+    opposite positions.
   - Be decisive when the evidence clearly favors one side.
 
 Return ONLY a JSON object (no markdown, no preamble):
 {
   "action": "ENTER_LONG" | "ENTER_SHORT" | "WAIT" | "AVOID" | "MANAGE_EXISTING",
   "winning_side": "BULL" | "BEAR" | "NEITHER",
-  "winning_specialties": ["which specialties won the debate, e.g. ['technical_bull','macro_bull']"],
+  "winning_specialties": ["which specialists carried the debate, e.g. ['sonnet_technical_bull','grok_technical_bull']"],
   "conviction_score": <float -100 to +100, negative=bear, positive=bull>,
   "confidence": <float 0.0 to 1.0>,
-  "rationale": "3-5 sentences explaining the decision and which specialists carried the day. MUST explicitly note any same-domain neutralization and any agent failures.",
+  "rationale": "3-5 sentences. MUST mention: (a) which model family is more convincing, (b) any cross-model disagreements, (c) same-domain neutralizations, (d) agent failures.",
+  "cross_model_agreement": {
+    "geopolitics": "strong_agree | mild_agree | split | strong_disagree",
+    "technical":   "strong_agree | mild_agree | split | strong_disagree",
+    "macro":       "strong_agree | mild_agree | split | strong_disagree"
+  },
   "key_pros": ["3-4 reasons supporting the verdict, citing which specialist raised each"],
   "key_cons": ["3-4 risks to the verdict, citing which specialist raised each"],
   "specific_action": "concrete next step in plain text: entry level, SL, TP, or 'wait for X event'",
@@ -283,16 +509,22 @@ Return ONLY a JSON object (no markdown, no preamble):
     "take_profit": <float|null>,
     "side": "LONG" | "SHORT" | null
   },
-  "neutralized_domains": ["list of domains where bull/bear cancelled out, e.g. ['technical']"],
+  "neutralized_domains": ["list of (domain, model) pairs where bull/bear cancelled out, e.g. ['sonnet_technical','grok_macro']"],
   "failed_agents": ["list of agent labels that had status='agent_failed'"],
   "team_scores": {
-    "bull_team_avg": <float 0-10, computed over NON-FAILED bull agents only>,
-    "bear_team_avg": <float 0-10, computed over NON-FAILED bear agents only>,
-    "strongest_specialist": "name of the single strongest case across both teams"
+    "sonnet_bull_avg": <float 0-10>,
+    "sonnet_bear_avg": <float 0-10>,
+    "grok_bull_avg":   <float 0-10>,
+    "grok_bear_avg":   <float 0-10>,
+    "bull_team_avg":   <float 0-10, all 6 bulls>,
+    "bear_team_avg":   <float 0-10, all 6 bears>,
+    "strongest_specialist": "name of the single strongest case across all 12 agents"
   },
   "agent_ratings": {
-    "geopolitics_bull": <0-10>, "technical_bull": <0-10>, "macro_bull": <0-10>,
-    "geopolitics_bear": <0-10>, "technical_bear": <0-10>, "macro_bear": <0-10>
+    "sonnet_geopolitics_bull": <0-10>, "sonnet_technical_bull": <0-10>, "sonnet_macro_bull": <0-10>,
+    "sonnet_geopolitics_bear": <0-10>, "sonnet_technical_bear": <0-10>, "sonnet_macro_bear": <0-10>,
+    "grok_geopolitics_bull":   <0-10>, "grok_technical_bull":   <0-10>, "grok_macro_bull":   <0-10>,
+    "grok_geopolitics_bear":   <0-10>, "grok_technical_bear":   <0-10>, "grok_macro_bear":   <0-10>
   }
 }
 
@@ -302,6 +534,7 @@ deterministically downstream — do NOT mention R:R ratios in your rationale tex
 
 
 _client: Anthropic | None = None
+_grok_client = None  # lazy-imported OpenAI-compatible client for xAI
 
 
 def _get_client() -> Anthropic:
@@ -309,6 +542,18 @@ def _get_client() -> Anthropic:
     if _client is None:
         _client = Anthropic(api_key=settings.anthropic_api_key)
     return _client
+
+
+def _get_grok_client():
+    """Return a cached OpenAI-compatible client pointing at xAI's endpoint."""
+    global _grok_client
+    if _grok_client is None:
+        from openai import OpenAI
+        _grok_client = OpenAI(
+            api_key=settings.xai_api_key,
+            base_url="https://api.x.ai/v1",
+        )
+    return _grok_client
 
 
 def _strip_json(text: str) -> str:
@@ -780,9 +1025,6 @@ def _validate_agent_output(parsed: dict, label: str, raw: str) -> dict:
 
 def _run_agent(system_prompt: str, context: dict, label: str) -> dict:
     """Run a single Sonnet agent with the given system prompt and context."""
-    # Context now contains a much richer snapshot — up to ~25kb of JSON. Most
-    # of it compresses well (repeated keys, floats). We cap at 30k chars and
-    # let the model see everything.
     user_prompt = (
         f"## Full Dashboard Context (authoritative — do not invent numbers)\n"
         f"{json.dumps(context, indent=2, default=str)[:30000]}\n\n"
@@ -819,17 +1061,87 @@ def _run_agent(system_prompt: str, context: dict, label: str) -> dict:
         }
 
 
-# Team roster: (specialist_label, system_prompt, side)
-_BULL_TEAM = [
-    ("geopolitics_bull", BULL_GEOPOLITICS_SYSTEM),
-    ("technical_bull",   BULL_TECHNICAL_SYSTEM),
-    ("macro_bull",       BULL_MACRO_SYSTEM),
+def _run_grok_agent(system_prompt: str, context: dict, label: str) -> dict:
+    """Run a single Grok 4.20 agent against the xAI OpenAI-compatible API.
+
+    Grok brings two things the Claude agents don't have:
+      - Live Twitter/X and web access (native in Grok 4.20)
+      - Different training data and reasoning bias
+    """
+    if not settings.xai_api_key:
+        return {
+            "status": "agent_failed",
+            "error": "XAI_API_KEY not configured",
+            "specialty": label,
+        }
+
+    user_prompt = (
+        f"## Full Dashboard Context (authoritative — do not invent numbers)\n"
+        f"{json.dumps(context, indent=2, default=str)[:30000]}\n\n"
+        f"Build your {label} case now. Pull relevant live X/web citations "
+        f"where they strengthen your thesis. Return ONLY the JSON object."
+    )
+
+    raw = ""
+    try:
+        response = _get_grok_client().chat.completions.create(
+            model=GROK_MODEL,
+            max_tokens=1800,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+        cleaned = _strip_json(raw)
+        parsed = json.loads(cleaned)
+        return _validate_agent_output(parsed, label, raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("%s grok agent returned unparseable JSON: %s", label, exc)
+        return {
+            "status": "agent_failed",
+            "error": f"json_decode: {exc}",
+            "raw_excerpt": raw[:400],
+            "specialty": label,
+        }
+    except Exception as exc:
+        logger.exception("%s grok agent failed", label)
+        return {
+            "status": "agent_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+            "raw_excerpt": raw[:400],
+            "specialty": label,
+        }
+
+
+# Team roster: (specialist_label, system_prompt)
+# Sonnet team — 6 agents
+_SONNET_BULL_TEAM = [
+    ("sonnet_geopolitics_bull", BULL_GEOPOLITICS_SYSTEM),
+    ("sonnet_technical_bull",   BULL_TECHNICAL_SYSTEM),
+    ("sonnet_macro_bull",       BULL_MACRO_SYSTEM),
 ]
-_BEAR_TEAM = [
-    ("geopolitics_bear", BEAR_GEOPOLITICS_SYSTEM),
-    ("technical_bear",   BEAR_TECHNICAL_SYSTEM),
-    ("macro_bear",       BEAR_MACRO_SYSTEM),
+_SONNET_BEAR_TEAM = [
+    ("sonnet_geopolitics_bear", BEAR_GEOPOLITICS_SYSTEM),
+    ("sonnet_technical_bear",   BEAR_TECHNICAL_SYSTEM),
+    ("sonnet_macro_bear",       BEAR_MACRO_SYSTEM),
 ]
+# Grok team — 6 agents with live X/web access
+_GROK_BULL_TEAM = [
+    ("grok_geopolitics_bull", GROK_BULL_GEOPOLITICS_SYSTEM),
+    ("grok_technical_bull",   GROK_BULL_TECHNICAL_SYSTEM),
+    ("grok_macro_bull",       GROK_BULL_MACRO_SYSTEM),
+]
+_GROK_BEAR_TEAM = [
+    ("grok_geopolitics_bear", GROK_BEAR_GEOPOLITICS_SYSTEM),
+    ("grok_technical_bear",   GROK_BEAR_TECHNICAL_SYSTEM),
+    ("grok_macro_bear",       GROK_BEAR_MACRO_SYSTEM),
+]
+
+# Back-compat aliases — anything old that referenced _BULL_TEAM / _BEAR_TEAM
+# now sees the full 12-strong roster (6 sonnet + 6 grok).
+_BULL_TEAM = _SONNET_BULL_TEAM + _GROK_BULL_TEAM
+_BEAR_TEAM = _SONNET_BEAR_TEAM + _GROK_BEAR_TEAM
 
 
 def _run_judge(context: dict, bull_team: dict[str, dict], bear_team: dict[str, dict]) -> dict:
@@ -857,43 +1169,63 @@ def _run_judge(context: dict, bull_team: dict[str, dict], bear_team: dict[str, d
 
 
 def _committee_debate(focus_hours: int = 4) -> dict:
-    """Run a full adversarial committee debate with 6 specialists + judge."""
+    """Run a full adversarial committee debate: 12 specialists + judge.
+
+    Six Claude Sonnet agents (bull+bear × geopolitics/technical/macro)
+    and six Grok 4.20 agents (same domains, with live X/web access) all
+    run in parallel. Opus judge then reads all 12 cases + full context
+    and renders a single verdict with deterministic R:R computation.
+    """
     started = datetime.now(tz=timezone.utc)
 
     context = _fetch_context(focus_hours=focus_hours)
 
-    # Run all 6 specialists in parallel
-    all_specialists = _BULL_TEAM + _BEAR_TEAM
-    results: dict[str, dict] = {}
+    # Run 12 specialists in parallel.
+    # Each entry: (label, system_prompt, runner_fn)
+    jobs = (
+        [(label, sp, _run_agent) for label, sp in _SONNET_BULL_TEAM]
+        + [(label, sp, _run_agent) for label, sp in _SONNET_BEAR_TEAM]
+        + [(label, sp, _run_grok_agent) for label, sp in _GROK_BULL_TEAM]
+        + [(label, sp, _run_grok_agent) for label, sp in _GROK_BEAR_TEAM]
+    )
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=12) as executor:
         futures = {
-            executor.submit(_run_agent, system_prompt, context, label): label
-            for label, system_prompt in all_specialists
+            executor.submit(runner, sp, context, label): label
+            for (label, sp, runner) in jobs
         }
         for future in as_completed(futures):
             label = futures[future]
             try:
-                results[label] = future.result(timeout=90)
+                results[label] = future.result(timeout=120)
             except Exception as exc:
                 logger.exception("Committee agent %s exploded", label)
-                results[label] = {"error": str(exc)}
+                results[label] = {
+                    "status": "agent_failed",
+                    "error": str(exc),
+                    "specialty": label,
+                }
 
-    bull_team_results = {label: results.get(label, {}) for label, _ in _BULL_TEAM}
-    bear_team_results = {label: results.get(label, {}) for label, _ in _BEAR_TEAM}
+    # Group results back into the four teams for the judge + response payload
+    sonnet_bull = {label: results.get(label, {}) for label, _ in _SONNET_BULL_TEAM}
+    sonnet_bear = {label: results.get(label, {}) for label, _ in _SONNET_BEAR_TEAM}
+    grok_bull = {label: results.get(label, {}) for label, _ in _GROK_BULL_TEAM}
+    grok_bear = {label: results.get(label, {}) for label, _ in _GROK_BEAR_TEAM}
 
-    # Count successful agents per team so downstream renderers can show
-    # "4/6 agents reported" etc instead of silently hiding failures.
+    # Composite team dicts passed to the judge (all bulls / all bears)
+    all_bulls = {**sonnet_bull, **grok_bull}
+    all_bears = {**sonnet_bear, **grok_bear}
+
+    # Failed agent audit
     failed_agents = [
-        label for label, r in {**bull_team_results, **bear_team_results}.items()
+        label for label, r in {**all_bulls, **all_bears}.items()
         if r.get("status") == "agent_failed"
     ]
 
-    judge_result = _run_judge(context, bull_team_results, bear_team_results)
+    judge_result = _run_judge(context, all_bulls, all_bears)
 
-    # Deterministically compute R:R from judge's trade_levels — the LLM
-    # sometimes hallucinates the math (e.g. claims 2.5:1 when it's actually
-    # 3.1:1). This overwrites any R:R the judge might have baked into text.
+    # Deterministic R:R from judge's trade_levels (LLM sometimes hallucinates)
     risk_reward = None
     if isinstance(judge_result, dict):
         risk_reward = _compute_risk_reward(judge_result.get("trade_levels"))
@@ -913,10 +1245,16 @@ def _committee_debate(focus_hours: int = 4) -> dict:
             "active_watch_session_id": (active_watch.get("session") or {}).get("session_id") if active_watch.get("active") else None,
         },
         "failed_agents": failed_agents,
-        "agents_reporting": f"{6 - len(failed_agents)}/6",
+        "agents_reporting": f"{12 - len(failed_agents)}/12",
         "risk_reward": risk_reward,
-        "bull_team": bull_team_results,
-        "bear_team": bear_team_results,
+        # Four team dicts for the UI — sonnet vs grok, bull vs bear
+        "sonnet_bull_team": sonnet_bull,
+        "sonnet_bear_team": sonnet_bear,
+        "grok_bull_team":   grok_bull,
+        "grok_bear_team":   grok_bear,
+        # Legacy aggregate keys for back-compat with old UI / chat rendering
+        "bull_team": all_bulls,
+        "bear_team": all_bears,
         "judge_verdict": judge_result,
     }
 
@@ -929,13 +1267,15 @@ PLUGIN_TOOLS: list[dict] = [
     {
         "name": "committee_debate",
         "description": (
-            "Run an adversarial trading committee: SIX specialist agents (3 bulls + 3 bears) "
-            "each build the strongest case for their side from their own domain "
-            "(geopolitics, technicals, macro), then a Judge reads all 6 cases and renders a "
-            "final verdict with specific action and levels. "
+            "Run an adversarial trading committee: TWELVE specialist agents — "
+            "a Claude Sonnet 4.6 team (3 bulls + 3 bears) and a Grok 4.20 team "
+            "(3 bulls + 3 bears), each covering geopolitics, technicals, and macro. "
+            "Every agent builds the strongest case for their side from their own domain, "
+            "then a Claude Opus 4.6 Judge reads all 12 cases, detects cross-model agreement "
+            "(Sonnet vs Grok in the same domain), and renders a final verdict with levels. "
             "Use when the user asks for a debate, a second opinion, adversarial analysis, "
             "'let them argue', or when scores are conflicting and a single view isn't enough. "
-            "Costs ~7 LLM calls (6 Sonnet + 1 Opus) and takes ~20-30 seconds."
+            "Costs ~13 LLM calls (6 Sonnet + 6 Grok + 1 Opus) and takes ~45-90 seconds."
         ),
         "input_schema": {
             "type": "object",
