@@ -358,6 +358,8 @@ def compute_campaign_state(campaign_id: int, current_price: float | None = None)
             "layers_used": layers_used,
             "max_layers": len(DCA_LAYERS_MARGIN),
             "next_layer_margin": next_margin,
+            "take_profit": campaign.take_profit,
+            "stop_loss": campaign.stop_loss,
             "size_multiplier": round(campaign_multiplier, 3),
             "sizing_info": campaign.sizing_info,
             "current_price": current_price,
@@ -405,10 +407,39 @@ def list_campaigns(status: str | None = None, limit: int = 50) -> list[dict]:
     return [compute_campaign_state(cid, current_price) for cid in ids if cid is not None]
 
 
+def _validate_tp_sl(
+    side: str,
+    entry: float,
+    take_profit: float | None,
+    stop_loss: float | None,
+) -> tuple[float | None, float | None]:
+    """Return (tp, sl) after sanity checks. Drops any level that's on the
+    wrong side of the entry (e.g. LONG with TP below entry) instead of
+    raising, so a partially-broken Opus output doesn't block the open."""
+    tp, sl = take_profit, stop_loss
+    if side == "LONG":
+        if tp is not None and tp <= entry:
+            logger.warning("rejecting LONG TP %.2f <= entry %.2f", tp, entry)
+            tp = None
+        if sl is not None and sl >= entry:
+            logger.warning("rejecting LONG SL %.2f >= entry %.2f", sl, entry)
+            sl = None
+    elif side == "SHORT":
+        if tp is not None and tp >= entry:
+            logger.warning("rejecting SHORT TP %.2f >= entry %.2f", tp, entry)
+            tp = None
+        if sl is not None and sl <= entry:
+            logger.warning("rejecting SHORT SL %.2f <= entry %.2f", sl, entry)
+            sl = None
+    return tp, sl
+
+
 def open_new_campaign(
     side: str,
     current_price: float,
     llm_confidence: float | None = None,
+    take_profit: float | None = None,
+    stop_loss: float | None = None,
 ) -> int | None:
     """Create a Campaign row and open the first DCA layer (layer 0).
 
@@ -418,9 +449,11 @@ def open_new_campaign(
         (unified score, LLM confidence, funding, drawdown, volatility)
       - Capped by the 80%-equity safety net via apply_equity_cap()
 
-    The multiplier + reasoning are persisted on the Campaign row so the
-    dashboard can show "why the bot sized this way" and every subsequent
-    DCA layer on this campaign uses the same multiplier.
+    TP/SL from the caller (typically the LLM strategist) are validated
+    against the entry price and persisted on the Campaign row so that
+    check_tp_sl_hits() can auto-close the campaign when price crosses
+    either level. Invalid levels (wrong side of entry) are silently
+    dropped rather than blocking the open.
 
     Returns the campaign id, or None if the equity cap zeroed out the size.
     """
@@ -433,6 +466,11 @@ def open_new_campaign(
     side_norm = side.upper()
     if side_norm not in ("LONG", "SHORT"):
         raise ValueError(f"Invalid side: {side}")
+
+    # Sanitise TP/SL against the entry price
+    take_profit, stop_loss = _validate_tp_sl(
+        side_norm, current_price, take_profit, stop_loss,
+    )
 
     # Compute multiplier + sizing info from current market state
     from shared.dynamic_sizing import _gather_sizing_state
@@ -478,6 +516,8 @@ def open_new_campaign(
             side=side_norm,
             status="open",
             max_loss_pct=HARD_STOP_DRAWDOWN_PCT,
+            take_profit=take_profit,
+            stop_loss=stop_loss,
             size_multiplier=multiplier,
             sizing_info=sizing_info,
         )
@@ -501,9 +541,11 @@ def open_new_campaign(
 
     logger.info(
         "Opened campaign #%s %s @ %.2f (layer 0, lots=%.4f, margin=%.0f, "
-        "multiplier=%.2fx base=%.0f)",
+        "multiplier=%.2fx base=%.0f, tp=%s, sl=%s)",
         campaign_id, side_norm, current_price, lots, margin,
         multiplier, base_margin,
+        f"${take_profit:.2f}" if take_profit else "none",
+        f"${stop_loss:.2f}" if stop_loss else "none",
     )
 
     # Capture entry snapshot for the trade journal (best-effort).
@@ -653,10 +695,13 @@ def close_campaign(campaign_id: int, status: str, notes: str | None = None) -> d
 # ---------------------------------------------------------------------------
 
 def check_tp_sl_hits() -> list[dict]:
-    """Scan open campaigns and enforce the hard-stop drawdown rule and campaign-level TP.
+    """Scan open campaigns and enforce TP / SL / hard-stop rules.
 
     For each open campaign:
-      - If campaign.take_profit is set and price crosses it → close_campaign(status='closed_tp')
+      - If campaign.take_profit is set and bar high/low crosses it →
+        close_campaign(status='closed_tp')
+      - If campaign.stop_loss is set and bar high/low crosses it →
+        close_campaign(status='closed_sl')
       - Compute unrealised PnL % vs total margin
       - If pnl_pct <= -max_loss_pct → close_campaign(status='closed_hard_stop')
 
@@ -678,9 +723,12 @@ def check_tp_sl_hits() -> list[dict]:
             .filter(Campaign.status == "open")
             .all()
         )
-        camp_rows = [(c.id, c.side, c.take_profit, c.max_loss_pct) for c in open_camps]
+        camp_rows = [
+            (c.id, c.side, c.take_profit, c.stop_loss, c.max_loss_pct)
+            for c in open_camps
+        ]
 
-    for camp_id, side, camp_tp, camp_max_loss in camp_rows:
+    for camp_id, side, camp_tp, camp_sl, camp_max_loss in camp_rows:
         # 1) Campaign-level take-profit check
         if camp_tp is not None:
             tp_hit = (side == "LONG" and high >= camp_tp) or (
@@ -698,9 +746,28 @@ def check_tp_sl_hits() -> list[dict]:
                 )
                 if snap:
                     closed.append(snap)
-                continue  # already closed, skip hard-stop check
+                continue  # already closed, skip other checks
 
-        # 2) Hard-stop drawdown check
+        # 2) Campaign-level stop-loss check
+        if camp_sl is not None:
+            sl_hit = (side == "LONG" and low <= camp_sl) or (
+                side == "SHORT" and high >= camp_sl
+            )
+            if sl_hit:
+                logger.warning(
+                    "Campaign #%s SL triggered: stop_loss=%.2f (high=%.2f low=%.2f)",
+                    camp_id, camp_sl, high, low,
+                )
+                snap = close_campaign(
+                    camp_id,
+                    status="closed_sl",
+                    notes=f"Campaign SL hit: price reached {camp_sl:.2f}",
+                )
+                if snap:
+                    closed.append(snap)
+                continue
+
+        # 3) Hard-stop drawdown check
         camp = compute_campaign_state(camp_id, current_price)
         if camp is None:
             continue

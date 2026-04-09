@@ -157,8 +157,27 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
                 free_margin, layer0_base * 0.5,
             )
             return
+        # Propagate Opus-provided TP/SL into the campaign so the auto-
+        # close check can enforce them. Numeric values only; None means
+        # "not specified" and the campaign just relies on the -50% margin
+        # hard stop.
+        opus_tp = rec.get("take_profit")
+        opus_sl = rec.get("stop_loss")
+        try:
+            opus_tp = float(opus_tp) if opus_tp not in (None, "") else None
+        except (TypeError, ValueError):
+            opus_tp = None
+        try:
+            opus_sl = float(opus_sl) if opus_sl not in (None, "") else None
+        except (TypeError, ValueError):
+            opus_sl = None
+
         campaign_id = open_new_campaign(
-            new_side, current_price, llm_confidence=conf,
+            new_side,
+            current_price,
+            llm_confidence=conf,
+            take_profit=opus_tp,
+            stop_loss=opus_sl,
         )
         if campaign_id is None:
             logger.warning(
@@ -171,6 +190,8 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
                 "id": campaign_id,
                 "side": new_side,
                 "entry_price": current_price,
+                "take_profit": opus_tp,
+                "stop_loss": opus_sl,
                 "layer": 0,
                 "reason": (rec.get("reasoning") or "")[:200],
             },
