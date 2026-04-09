@@ -1,26 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import useApi from "./hooks/useApi";
-import AnalysisScoresPanel from "./components/AnalysisScoresPanel";
-import PriceChart, { OHLCVBar, PositionOverlay, SignalOverlay } from "./components/PriceChart";
-import SignalHistory, { Signal } from "./components/SignalHistory";
-import LogsPanel from "./components/LogsPanel";
+import { OHLCVBar, PositionOverlay, SignalOverlay } from "./components/PriceChart";
+import { Signal } from "./components/SignalHistory";
 import SignalDetailDrawer from "./components/SignalDetailDrawer";
-import MarketfeedPanel from "./components/MarketfeedPanel";
 import ChatPanel from "./components/ChatPanel";
-import AccountPanel from "./components/AccountPanel";
-import CampaignsPanel from "./components/CampaignsPanel";
-import BinanceMetricsPanel from "./components/BinanceMetricsPanel";
-import BinanceProPanel from "./components/BinanceProPanel";
-import ConvictionMeter from "./components/ConvictionMeter";
-import SynthesisPanel from "./components/SynthesisPanel";
-import RiskToolsPanel from "./components/RiskToolsPanel";
-import CrossContextPanel from "./components/CrossContextPanel";
-import LearningPanel from "./components/LearningPanel";
-import LivePriceTicker from "./components/LivePriceTicker";
-import HeartbeatPill from "./components/HeartbeatPill";
-import ScalpBrainPanel from "./components/ScalpBrainPanel";
-import ScalpingRangePanel from "./components/ScalpingRangePanel";
-import TwelveSensorPanel from "./components/TwelveSensorPanel";
+import CockpitBar, { TabKey, TABS } from "./components/CockpitBar";
+import TradeNowTab from "./components/tabs/TradeNowTab";
+import PositionsTab from "./components/tabs/PositionsTab";
+import MarketTab from "./components/tabs/MarketTab";
+import InvestigateTab from "./components/tabs/InvestigateTab";
+import SystemTab from "./components/tabs/SystemTab";
 
 // ---------------------------------------------------------------------------
 // Types matching the backend JSON
@@ -94,6 +83,25 @@ function useWebSocket(url: string, onMessage: (msg: WsUpdate) => void) {
 }
 
 // ---------------------------------------------------------------------------
+// Tab persistence
+// ---------------------------------------------------------------------------
+
+const TAB_STORAGE_KEY = "dashboard:active_tab";
+
+const loadInitialTab = (): TabKey => {
+  if (typeof window === "undefined") return "trade_now";
+  try {
+    const stored = window.localStorage.getItem(TAB_STORAGE_KEY);
+    if (stored && TABS.some((t) => t.key === stored)) {
+      return stored as TabKey;
+    }
+  } catch {
+    // localStorage blocked — fall through to default
+  }
+  return "trade_now";
+};
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -103,7 +111,8 @@ const WS_URL =
     : "ws://localhost:8000/ws";
 
 const App: React.FC = () => {
-  // REST data — polled every 30 s
+  // REST data polled at App level so the cockpit (and whichever tab is
+  // mounted) can read it. Heavy per-tab data is polled inside each panel.
   const { data: latestScore, loading: scoreLoading } =
     useApi<AnalysisScore>("/api/scores/latest", { pollInterval: 30_000 });
 
@@ -112,13 +121,12 @@ const App: React.FC = () => {
     { pollInterval: 30_000 }
   );
 
-  // Open positions — for chart overlays (polled every 5s)
   const { data: openPositions } = useApi<OpenPosition[]>(
     "/api/positions?status=open",
     { pollInterval: 5_000 }
   );
 
-  // Timeframe selector — poll faster for lower timeframes
+  // Chart timeframe state — lives here so switching tabs doesn't reset it
   const [timeframe, setTimeframe] = useState<string>("1min");
   const pollInterval =
     timeframe === "1min" ? 3_000
@@ -145,8 +153,45 @@ const App: React.FC = () => {
 
   const score = liveScore ?? latestScore;
 
-  // Signal detail drawer state
+  // Signal detail drawer state — modal works from any tab
   const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
+
+  // Tab state + persistence
+  const [activeTab, setActiveTab] = useState<TabKey>(loadInitialTab);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TAB_STORAGE_KEY, activeTab);
+    } catch {
+      // ignore
+    }
+  }, [activeTab]);
+
+  // Keyboard shortcuts 1-5 for tab switching
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Ignore when typing in an input / textarea / contentEditable
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const tab = TABS.find((t) => t.shortcut === e.key);
+      if (tab) {
+        setActiveTab(tab.key);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // Derived overlays for PriceChart
   const positionOverlays: PositionOverlay[] = (openPositions ?? []).map((p) => ({
@@ -165,159 +210,44 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-4 md:p-6">
-      {/* Header */}
-      <header className="mb-6 grid grid-cols-1 md:grid-cols-3 items-center gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-white tracking-tight">
-            WTI Crude Trading Dashboard
-          </h1>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {lastUpdate
-              ? `Last update: ${new Date(lastUpdate).toLocaleTimeString()}`
-              : "Connecting…"}
-          </p>
-        </div>
+      <CockpitBar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        wsConnected={wsConnected}
+        lastUpdate={lastUpdate}
+      />
 
-        {/* Live price ticker — center of header */}
-        <div className="flex justify-center">
-          <LivePriceTicker />
-        </div>
-
-        {/* Heartbeat pill + WebSocket status pill — right side */}
-        <div className="flex justify-end items-center gap-2">
-          <HeartbeatPill />
-          <span
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
-              wsConnected
-                ? "bg-green-900 text-green-300"
-                : "bg-red-900 text-red-300"
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                wsConnected ? "bg-green-400 animate-pulse" : "bg-red-400"
-              }`}
-            />
-            {wsConnected ? "Live" : "Disconnected"}
-          </span>
-        </div>
-      </header>
-
-      {/* Synthesis layer — Now Brief + Signal Confluence + Anomaly Radar */}
-      <SynthesisPanel />
-
-      {/* Account Panel */}
-      <AccountPanel />
-
-      {/* Scalp Brain — one-panel verdict stitching every intraday signal */}
-      <ScalpBrainPanel />
-
-      {/* Scalping Range — 5-min entries for intraday scalping */}
-      <ScalpingRangePanel />
-
-      {/* Twelve Data sensors — sessions, WTI indicators, cross-asset stress */}
-      <TwelveSensorPanel />
-
-      {/* Risk & Scenario Tools — scenario calculator, Monte Carlo, VWAP, calendar */}
-      <RiskToolsPanel />
-
-      {/* Cross-Asset + CVD flow */}
-      <CrossContextPanel />
-
-      {/* Learning & Feedback Loop — journal, pattern match, smart alerts */}
-      <LearningPanel />
-
-      {/* Conviction Meter — composite decision support (own row) */}
-      <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <ConvictionMeter />
-      </div>
-
-      {/* Binance Derivatives Metrics — funding, OI, L/S ratios, liquidations */}
-      <BinanceMetricsPanel />
-
-      {/* Binance Pro — orderbook, whale trades, volume profile */}
-      <BinanceProPanel />
-
-      {/* Analysis Scores — full-width row of 5 bipolar score cards */}
-      <AnalysisScoresPanel scores={score as any} loading={scoreLoading} />
-
-      {/* Price Chart */}
-      <section className="mb-6">
-        {/* Timeframe tabs */}
-        <div className="flex items-center gap-1 mb-2">
-          {["1min", "5min", "15min", "1H", "1D", "1W"].map((tf) => (
-            <button
-              key={tf}
-              onClick={() => setTimeframe(tf)}
-              className={`px-3 py-1 text-xs rounded font-medium transition ${
-                timeframe === tf
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-              }`}
-            >
-              {tf}
-            </button>
-          ))}
-          <span className="ml-auto text-[10px] text-gray-600">
-            {timeframe === "1min"
-              ? "Refreshing every 3s"
-              : timeframe === "5min"
-              ? "Refreshing every 10s"
-              : timeframe === "15min"
-              ? "Refreshing every 30s"
-              : "Refreshing every 1-5min"}
-          </span>
-        </div>
-        {ohlcvLoading && (!ohlcv || ohlcv.length === 0) ? (
-          <div className="bg-gray-900 rounded-xl p-4 h-40 flex items-center justify-center text-gray-600 text-sm">
-            Loading chart…
-          </div>
-        ) : (
-          <PriceChart
-            key={timeframe}
-            bars={ohlcv ?? []}
+      {/* Tab content — lazy: only the active tab mounts */}
+      <main className="mt-6">
+        {activeTab === "trade_now" && (
+          <TradeNowTab
             timeframe={timeframe}
-            positions={positionOverlays}
-            signals={signalOverlays}
+            setTimeframe={setTimeframe}
+            ohlcv={ohlcv ?? []}
+            ohlcvLoading={ohlcvLoading}
+            positionOverlays={positionOverlays}
+            signalOverlays={signalOverlays}
           />
         )}
-      </section>
-
-      {/* Open Campaigns (replaces PositionsPanel) */}
-      <CampaignsPanel />
-
-      {/* Signal History */}
-      <section className="mb-6">
-        <h2 className="text-xs uppercase tracking-widest text-gray-500 mb-3">
-          Signal History
-        </h2>
-        {signalsLoading && (!signals || signals.length === 0) ? (
-          <p className="text-gray-600 text-sm">Loading signals…</p>
-        ) : (
-          <SignalHistory
+        {activeTab === "positions" && <PositionsTab />}
+        {activeTab === "market" && <MarketTab />}
+        {activeTab === "investigate" && (
+          <InvestigateTab
+            score={score as any}
+            scoreLoading={scoreLoading}
             signals={signals ?? []}
+            signalsLoading={signalsLoading}
             onSignalClick={setSelectedSignalId}
           />
         )}
-      </section>
+        {activeTab === "system" && <SystemTab />}
+      </main>
 
-      {/* Marketfeed Knowledge */}
-      <section className="mb-6">
-        <MarketfeedPanel />
-      </section>
-
-      {/* Live Logs */}
-      <section>
-        <LogsPanel />
-      </section>
-
-      {/* Signal detail drawer — portaled over layout */}
+      {/* Global overlays — accessible from any tab */}
       <SignalDetailDrawer
         signalId={selectedSignalId}
         onClose={() => setSelectedSignalId(null)}
       />
-
-      {/* Floating chat panel */}
       <ChatPanel />
     </div>
   );
