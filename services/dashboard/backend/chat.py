@@ -85,10 +85,78 @@ to track strategy, scoring, and the internal book.
    corresponding getter tool (get_active_watch, get_campaigns, list_active_alerts).
 4. CITE specific evidence — campaign IDs, recommendation IDs, knowledge digest events,
    score values — and always from CURRENT tool output, never from memory.
-5. Be concise (3-5 sentences max; tables for data).
+5. Be concise (3-5 sentences max; tables for data when on web dashboard).
 6. Before opening or DCAing, check get_account_state to confirm free_margin available.
 7. After executing a write tool, briefly report what you did (campaign id, side, reason).
-8. Never invent data. If a tool returns an error, surface it to the user."""
+8. Never invent data. If a tool returns an error, surface it to the user.
+9. **LANGUAGE: Always reply in English.** Even if the user writes in Polish
+   or any other language, always respond in English. This is a strict rule
+   with no exceptions — the user wants all bot output in English."""
+
+
+# Formatting rules injected ONLY when the session runs over Telegram (phones).
+# Telegram legacy Markdown does NOT support tables, ### headers, or horizontal
+# rules — they render as literal pipes and hashes and destroy readability on
+# narrow mobile screens. The dashboard web UI handles full markdown fine, so
+# this addendum is telegram-only.
+TELEGRAM_FORMAT_RULES = """
+
+## TELEGRAM OUTPUT RULES — STRICT
+You are replying on Telegram mobile. Legacy Markdown only. Follow these rules:
+
+FORBIDDEN — these break on phones:
+- NO markdown tables (pipes `|` render as literal characters)
+- NO `#`, `##`, `###` headers (render as literal `###` text)
+- NO horizontal rules (`---`, `***`)
+- NO nested bullets (phones wrap them weirdly)
+- NO long lines — keep every line under ~60 characters where possible
+
+ALLOWED — Telegram renders these correctly:
+- `*bold labels*` (single asterisks, NOT **double**)
+- `_italic_` (single underscores)
+- `` `inline code` `` for numbers, tickers, IDs
+- Emoji as visual section markers (🐂 🐻 ⚖️ 🎯 📊 ✅ ❌ 🟢 🔴)
+- Single-level bullets with `•` or `–`
+- `> blockquote` for the final verdict line only
+
+STRUCTURE for debates / committee results — use this shape:
+```
+*🏛️ Debate — WTI @ $100.19*
+Short entry: `$99.50` • P/L: `-$0.69` ❌
+Unified: `10.1` (mildly bullish)
+
+*🐂 BULLS (Sonnet + Grok)*
+• Geo: Hormuz -85%, pipeline destroyed (strong 🔴)
+• Tech: $100 holding as support (52%)
+• Macro: ADNOC cutting production (strong)
+Target: `$104-108` SL: `$98.50`
+
+*🐻 BEARS*
+• Geo: Trump-Netanyahu de-escalation
+• Tech: momentum down, -$2.73 from peak
+• Macro: tariffs as leverage, not escalation
+Target: `$97-98` SL: `$103`
+
+*⚖️ Verdict*
+> 🐂 Bulls win 5.85 vs 5.5 — Hormuz > diplomacy
+R:R: `null` (no setup) • Agents: 12/12 ✅
+
+*🎯 Your short @ $99.50*
+❌ Against (70%):
+• Hormuz still 85% blocked
+• Saudi pipeline physically damaged
+• You're underwater -$0.69
+
+✅ For (30%):
+• De-escalation is real
+• Price already dropped $2.73
+
+*Recommendation:* Close or tight SL @ `$101.50`
+```
+
+Keep total message under 3500 chars. Favor short lines with emoji prefixes
+over any kind of tabular layout. The goal is scannable on a phone screen.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +194,11 @@ def stream_chat(message: str, session_id: str = "default") -> Generator[str, Non
 
     client = Anthropic(api_key=settings.anthropic_api_key)
 
+    # Telegram sessions get extra formatting rules — tables and ### headers
+    # don't render on mobile and destroy readability.
+    is_telegram = session_id.startswith("telegram_")
+    system_prompt = SYSTEM_PROMPT + (TELEGRAM_FORMAT_RULES if is_telegram else "")
+
     # Agentic tool-use loop — continue until the model stops requesting tools
     max_iterations = 20
     for iteration in range(max_iterations):
@@ -133,7 +206,7 @@ def stream_chat(message: str, session_id: str = "default") -> Generator[str, Non
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=1500,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 tools=TOOLS,
                 messages=history,
             )
