@@ -43,6 +43,7 @@ def main() -> None:
         collect_funding_rate as bn_funding,
     )
     from collectors.binance_liquidations_ws import start_liquidations_ws
+    from collectors.cross_assets import collect_and_store as cross_assets_collect
     from collectors.shipping import collect_and_store as shipping_collect
     from collectors.portwatch import collect_and_store as portwatch_collect
     from collectors.cot import collect_and_store as cot_collect
@@ -98,6 +99,13 @@ def main() -> None:
     scheduler.add_job(
         safe_run, "interval", minutes=30, args=[bn_funding, 500],
         id="binance_funding", name="Binance funding rate history",
+        max_instances=1, coalesce=True,
+    )
+
+    # Cross-asset context (DXY / SPX / Gold / BTC / VIX) — 15 min cadence
+    scheduler.add_job(
+        safe_run, "interval", minutes=15, args=[cross_assets_collect, "1h", "5d"],
+        id="cross_assets", name="Cross-asset correlations",
         max_instances=1, coalesce=True,
     )
 
@@ -158,6 +166,10 @@ def main() -> None:
     logger.info("Warming up Binance metrics (OI, LSR, taker, funding) …")
     safe_run(bn_funding, 500)
     safe_run(bn_metrics_all)
+
+    # Warm up cross-asset collectors (DXY / SPX / Gold / BTC / VIX)
+    logger.info("Warming up cross-asset collectors …")
+    safe_run(cross_assets_collect, "1h", "5d")
 
     # Warm up macro / shipping collectors so the analyzer has fundamental
     # and shipping data on first cycle (instead of waiting hours).

@@ -14,6 +14,7 @@ import BinanceProPanel from "./components/BinanceProPanel";
 import ConvictionMeter from "./components/ConvictionMeter";
 import SynthesisPanel from "./components/SynthesisPanel";
 import RiskToolsPanel from "./components/RiskToolsPanel";
+import CrossContextPanel from "./components/CrossContextPanel";
 
 // ---------------------------------------------------------------------------
 // Types matching the backend JSON
@@ -196,6 +197,9 @@ const App: React.FC = () => {
 
       {/* Risk & Scenario Tools — scenario calculator, Monte Carlo, VWAP, calendar */}
       <RiskToolsPanel />
+
+      {/* Cross-Asset + CVD flow */}
+      <CrossContextPanel />
 
       {/* Conviction Meter — composite decision support (own row) */}
       <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-3">

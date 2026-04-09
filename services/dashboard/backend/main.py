@@ -332,6 +332,28 @@ def get_upcoming_events_endpoint(days: int = Query(default=7, ge=1, le=30)) -> d
         return {"error": str(exc)}
 
 
+@app.get("/api/cross-assets")
+def get_cross_assets_endpoint(hours: int = Query(default=24, ge=1, le=168)) -> dict[str, Any]:
+    """Return latest values / 1h / 24h change / correlation for DXY/SPX/Gold/BTC/VIX."""
+    try:
+        from plugin_cross_cvd import cross_asset_snapshot
+        return {"data": cross_asset_snapshot(hours=hours)}
+    except Exception as exc:
+        logger.exception("cross-assets failed")
+        return {"error": str(exc)}
+
+
+@app.get("/api/cvd")
+def get_cvd_endpoint(minutes: int = Query(default=60, ge=5, le=500)) -> dict[str, Any]:
+    """Return Cumulative Volume Delta series for CLUSDT."""
+    try:
+        from plugin_cross_cvd import cvd_series
+        return {"data": cvd_series(minutes=minutes)}
+    except Exception as exc:
+        logger.exception("cvd failed")
+        return {"error": str(exc)}
+
+
 @app.get("/api/vwap")
 def get_vwap_endpoint(
     timeframe: str = Query(default="1H"),
