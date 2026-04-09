@@ -108,11 +108,18 @@ def format_system_alert(message: str) -> str:
 
 
 _POSITION_EVENT_TITLES = {
-    "opened":          ("\U0001f4e5", "Position OPENED"),    # inbox tray
-    "tp_hit":          ("\U0001f3af", "TAKE-PROFIT HIT"),    # bullseye
-    "sl_hit":          ("\U0001f6d1", "STOP-LOSS HIT"),      # stop sign
-    "strategy_close":  ("\U0001f504", "Position CLOSED by strategy"),  # arrows in cycle
-    "manual_close":    ("\u270b", "Position CLOSED manually"),         # hand
+    # Legacy single-position events
+    "opened":                ("\U0001f4e5", "Position OPENED"),
+    "tp_hit":                ("\U0001f3af", "TAKE-PROFIT HIT"),
+    "sl_hit":                ("\U0001f6d1", "STOP-LOSS HIT"),
+    "strategy_close":        ("\U0001f504", "Position CLOSED by strategy"),
+    "manual_close":          ("\u270b",     "Position CLOSED manually"),
+    # Campaign lifecycle events (ai-brain auto-trader + dashboard API)
+    "campaign_opened":       ("\U0001f680", "Campaign OPENED"),          # rocket
+    "dca_layer_added":       ("\U0001f501", "DCA Layer ADDED"),          # repeat
+    "campaign_manual_close": ("\u270b",     "Campaign CLOSED manually"),
+    "campaign_tp":           ("\U0001f3af", "Campaign TAKE-PROFIT HIT"),
+    "campaign_hard_stop":    ("\U0001f6d1", "Campaign HARD STOP HIT"),
 }
 
 
@@ -157,38 +164,106 @@ def format_marketfeed_digest(evt: dict) -> str | None:
 
 
 def format_position_event(evt: dict) -> str | None:
-    """Format a Position lifecycle event into a Telegram alert."""
+    """Format a Position or Campaign lifecycle event into a Telegram alert.
+
+    Handles two event families that share one stream:
+
+    A. Single-position events from pre-campaign era:
+       {type: opened/tp_hit/sl_hit/strategy_close/manual_close,
+        id, side, entry_price, close_price, stop_loss, take_profit,
+        realised_pnl, timestamp, notes}
+
+    B. Campaign-level events from ai-brain auto-trader + dashboard API:
+       - campaign_opened:       {id|campaign_id, side, entry_price, layer, reason}
+       - dca_layer_added:       {campaign_id, position_id, side, entry_price|price, layer, reason}
+       - campaign_manual_close: {campaign_id, side, realized_pnl, ...}
+       - campaign_tp/hard_stop: {campaign_id, side, ...}
+    """
     kind = str(evt.get("type", "")).lower()
     if kind not in _POSITION_EVENT_TITLES:
         return None
 
     icon, title = _POSITION_EVENT_TITLES[kind]
     side = str(evt.get("side", "")).upper()
-    pos_id = evt.get("id")
 
-    lines = [
-        f"{icon} *{title}*",
-        f"Position #{pos_id} — {side}",
-        "",
-    ]
+    # Identifier: prefer campaign_id for campaign events, else fall back to id
+    camp_id = evt.get("campaign_id")
+    pos_id = evt.get("position_id") or evt.get("id")
 
-    entry = evt.get("entry_price")
-    close_p = evt.get("close_price")
+    header_lines = [f"{icon} *{title}*"]
+    if kind.startswith("campaign_") or kind == "dca_layer_added":
+        if camp_id is not None:
+            header_lines.append(f"Campaign #{camp_id} — {side}")
+        elif pos_id is not None:
+            header_lines.append(f"Campaign #{pos_id} — {side}")
+    elif pos_id is not None:
+        header_lines.append(f"Position #{pos_id} — {side}")
+
+    lines = header_lines + [""]
+
+    # Entry price appears under multiple keys depending on event shape
+    entry = (
+        evt.get("entry_price")
+        if evt.get("entry_price") is not None
+        else evt.get("price")
+        if evt.get("price") is not None
+        else evt.get("avg_entry_price")
+    )
+    close_p = evt.get("close_price") or evt.get("current_price")
     sl = evt.get("stop_loss")
     tp = evt.get("take_profit")
-    pnl = evt.get("realised_pnl")
+    pnl = evt.get("realised_pnl") or evt.get("realized_pnl")
 
     if entry is not None:
-        lines.append(f"Entry:       ${entry:.2f}")
+        try:
+            lines.append(f"Entry:       ${float(entry):.2f}")
+        except (TypeError, ValueError):
+            pass
     if sl is not None and close_p is None:
-        lines.append(f"Stop-Loss:   ${sl:.2f}")
+        try:
+            lines.append(f"Stop-Loss:   ${float(sl):.2f}")
+        except (TypeError, ValueError):
+            pass
     if tp is not None and close_p is None:
-        lines.append(f"Take-Profit: ${tp:.2f}")
-    if close_p is not None:
-        lines.append(f"Close:       ${close_p:.2f}")
+        try:
+            lines.append(f"Take-Profit: ${float(tp):.2f}")
+        except (TypeError, ValueError):
+            pass
+    if close_p is not None and kind.endswith("_close") or kind in ("tp_hit", "sl_hit"):
+        try:
+            lines.append(f"Close:       ${float(close_p):.2f}")
+        except (TypeError, ValueError):
+            pass
     if pnl is not None:
-        sign = "+" if pnl >= 0 else ""
-        lines.append(f"P/L:         {sign}${pnl:.2f}")
+        try:
+            pnl_f = float(pnl)
+            sign = "+" if pnl_f >= 0 else ""
+            lines.append(f"P/L:         {sign}${pnl_f:.2f}")
+        except (TypeError, ValueError):
+            pass
+
+    # Campaign-level extras
+    layers_used = evt.get("layers_used")
+    max_layers = evt.get("max_layers")
+    if layers_used is not None and max_layers is not None:
+        lines.append(f"Layers:      {layers_used}/{max_layers}")
+
+    layer_idx = evt.get("layer")
+    if layer_idx is not None:
+        lines.append(f"Layer:       #{layer_idx}")
+
+    total_lots = evt.get("total_lots")
+    total_margin = evt.get("total_margin")
+    if total_lots is not None:
+        try:
+            lines.append(f"Total lots:  {float(total_lots):.2f}")
+        except (TypeError, ValueError):
+            pass
+    if total_margin is not None:
+        try:
+            lines.append(f"Margin:      ${float(total_margin):.0f}")
+        except (TypeError, ValueError):
+            pass
 
     notes = evt.get("notes") or evt.get("reason")
     if notes:
