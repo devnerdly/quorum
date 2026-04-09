@@ -60,7 +60,7 @@ def format_signal_alert(rec: dict) -> str:
     timestamp = rec.get("timestamp", "")
 
     lines = [
-        f"{emoji} *WTI Crude Signal: {action}*",
+        f"{emoji} *{_test_prefix(rec)}WTI Crude Signal: {action}*",
         f"Score: {score_str} | Confidence: {confidence_str}",
         "",
     ]
@@ -105,6 +105,30 @@ def format_signal_alert(rec: dict) -> str:
 def format_system_alert(message: str) -> str:
     """Format a system/operational alert."""
     return f"{WARNING_EMOJI} *System Alert*\n{message}"
+
+
+def _is_test_event(evt: dict) -> bool:
+    """True if the event is a test/smoke-test payload.
+
+    Convention: every smoke-test publish sets `is_test=True` (or legacy
+    `test=True`). Formatters that render user-facing Telegram messages
+    prepend a loud 🧪 TEST marker in that case so real alerts can never
+    be confused with test traffic.
+    """
+    if not isinstance(evt, dict):
+        return False
+    return bool(evt.get("is_test") or evt.get("test"))
+
+
+def _test_prefix(evt: dict) -> str:
+    """Return the title prefix string to use for a possibly-test event.
+
+    Empty string for real events, '🧪 TEST — ' for test payloads.
+    Designed to be prepended to the title of any format helper:
+
+        title = f"{_test_prefix(evt)}Heartbeat Status"
+    """
+    return "🧪 TEST — " if _is_test_event(evt) else ""
 
 
 def _format_sizing_block(evt: dict) -> list[str]:
@@ -200,7 +224,7 @@ def _format_heartbeat_status(evt: dict) -> str:
     side = str(evt.get("side", "")).upper()
     title = "Heartbeat status"
 
-    lines = [f"{icon} *{title}*"]
+    lines = [f"{icon} *{_test_prefix(evt)}{title}*"]
     if camp_id is not None:
         lines.append(f"Campaign #{camp_id} — {side}")
     lines.append("")
@@ -274,7 +298,9 @@ def _format_heartbeat_status(evt: dict) -> str:
 
     reason = (evt.get("latest_reason") or "").strip()
     if reason:
-        lines += ["", f"_{reason[:300]}_"]
+        # Full reason — no truncation. The notifier's _send_chunked()
+        # handles Telegram's 3800-char cap by splitting across messages.
+        lines += ["", f"_{reason}_"]
 
     ts = evt.get("timestamp")
     if ts:
@@ -295,7 +321,7 @@ def _format_scalp_brain_alert(evt: dict) -> str:
     conviction = evt.get("conviction_pct")
 
     title = f"Scalp {verdict} NOW"
-    lines = [f"{icon} *{title}*"]
+    lines = [f"{icon} *{_test_prefix(evt)}{title}*"]
     if current is not None:
         try:
             lines.append(f"Price: `${float(current):.3f}`  •  Conviction {int(conviction or 0)}%")
@@ -351,7 +377,7 @@ def _format_heartbeat_action(evt: dict) -> str:
     else:
         title = f"Heartbeat {action}"
 
-    lines = [f"{icon} *{title}*"]
+    lines = [f"{icon} *{_test_prefix(evt)}{title}*"]
     if camp_id is not None:
         lines.append(f"Campaign #{camp_id} — {side}")
     lines.append("")
@@ -423,7 +449,7 @@ def format_marketfeed_digest(evt: dict) -> str | None:
     window = evt.get("window", "5min")
 
     lines = [
-        f"{icon} *@marketfeed digest* ({window}, {count} msgs)",
+        f"{icon} *{_test_prefix(evt)}@marketfeed digest* ({window}, {count} msgs)",
         f"Sentiment: {sentiment_label.upper()} ({score:+.2f})",
         "",
     ]
@@ -475,6 +501,7 @@ def format_position_event(evt: dict) -> str | None:
         return _format_scalp_brain_alert(evt)
 
     icon, title = _POSITION_EVENT_TITLES[kind]
+    title = f"{_test_prefix(evt)}{title}"
     side = str(evt.get("side", "")).upper()
 
     # Identifier: prefer campaign_id for campaign events, else fall back to id

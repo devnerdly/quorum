@@ -172,7 +172,11 @@ async def _consume_stream(
                 continue
             logger.info("[%s] Alert:\n%s", stream, text)
             if bot:
-                await _safe_send(bot, text)
+                # Use chunked send so long Opus rationales (full-length
+                # heartbeat reasons) split across multiple messages
+                # instead of being silently truncated at the 4096-char
+                # Telegram cap.
+                await _send_chunked(bot, text)
         except Exception:
             logger.exception("Failed to process/send %s message %s", stream, msg_id)
 

@@ -974,7 +974,9 @@ def _build_status_ping_payload(camp_ctx: dict, latest_reason: str | None) -> dic
         "total_lots": camp_ctx.get("total_lots"),
         "total_nominal": camp_ctx.get("total_nominal"),
         "leverage": camp_ctx.get("leverage") or DEFAULT_LEVERAGE,
-        "latest_reason": (latest_reason or "")[:400],
+        # Keep the full Opus reason — Telegram chunking (3800 chars) handles
+        # any overflow, so we stop truncating here.
+        "latest_reason": (latest_reason or ""),
     }
 
 
