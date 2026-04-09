@@ -93,6 +93,37 @@ def collect_and_store() -> None:
         logger.info("No new @marketfeed messages in last %d min — skipping summary", _WINDOW_MINUTES)
         return
 
+    # Skip the Haiku call entirely when the window has <3 headlines. Most
+    # such windows are noise — the LLM always comes back with "no material
+    # news" and we waste ~$0.003 per call. Cheaper to synthesise a
+    # placeholder digest row locally so the downstream consumers still
+    # see the expected cadence.
+    if len(rows) < 3:
+        logger.info(
+            "Only %d @marketfeed messages in last %d min — writing placeholder digest, skipping Haiku",
+            len(rows), _WINDOW_MINUTES,
+        )
+        avg_score = sum(float(r.score or 0.0) for r in rows) / len(rows) if rows else 0.0
+        placeholder_summary = (
+            f"Only {len(rows)} headline{'s' if len(rows) != 1 else ''} this window — no material news flow."
+        )
+        now = datetime.now(tz=timezone.utc)
+        with SessionLocal() as session:
+            row = KnowledgeSummary(
+                timestamp=now,
+                source=_SOURCE_NAME,
+                window=f"{_WINDOW_MINUTES}min",
+                message_count=len(rows),
+                summary=placeholder_summary,
+                key_events=json.dumps([str(r.title)[:200] for r in rows])[:5000],
+                sentiment_score=avg_score,
+                sentiment_label=("bullish" if avg_score > 0.15 else "bearish" if avg_score < -0.15 else "neutral"),
+            )
+            session.add(row)
+            session.commit()
+        logger.info("Wrote placeholder digest (%d headlines)", len(rows))
+        return
+
     headlines = "\n".join(
         f"- [{r.timestamp.strftime('%H:%M')} | score {r.score:+.2f} | rel {r.relevance:.2f}] {r.title}"
         for r in rows

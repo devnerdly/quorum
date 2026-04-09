@@ -1036,7 +1036,15 @@ def _run_agent(system_prompt: str, context: dict, label: str) -> dict:
         response = _get_client().messages.create(
             model=BULL_BEAR_MODEL,
             max_tokens=1600,
-            system=system_prompt,
+            # Prompt cache the specialist system prompt — it's stable
+            # across the whole debate and across debates within 5 min.
+            system=[
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text if response.content else ""
@@ -1157,7 +1165,16 @@ def _run_judge(context: dict, bull_team: dict[str, dict], bear_team: dict[str, d
         response = _get_client().messages.create(
             model=JUDGE_MODEL,
             max_tokens=2000,
-            system=JUDGE_SYSTEM,
+            # Prompt cache the judge system prompt — it's static and the
+            # judge always runs after 12 specialists so the 5-min window
+            # almost always gives a cache hit within a single debate.
+            system=[
+                {
+                    "type": "text",
+                    "text": JUDGE_SYSTEM,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text if response.content else ""

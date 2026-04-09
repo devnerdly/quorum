@@ -36,7 +36,7 @@ function riskColor(level: number): { bg: string; text: string; bar: string } {
 
 const NowBriefCard: React.FC = () => {
   const { data, refetch } = useApi<NowBrief>("/api/now-brief", {
-    pollInterval: 30_000,
+    pollInterval: 90_000,
   });
 
   const forceRefresh = async () => {

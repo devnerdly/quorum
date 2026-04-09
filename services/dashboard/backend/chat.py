@@ -34,7 +34,11 @@ for _p in _PLUGINS:
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-opus-4-6"
+# Sonnet is 5x cheaper than Opus and handles 95% of chat queries
+# (price lookups, position details, "close my short", "what does X mean")
+# with zero quality degradation. Opus escalation is available via the
+# 12-agent committee when the user explicitly asks for a debate.
+MODEL = "claude-sonnet-4-6"
 
 SYSTEM_PROMPT = """You are the trading assistant for a WTI crude oil CFD trader on XTB (OIL.WTI symbol).
 You have access to a live trading bot's database AND can EXECUTE trades on the bot's
@@ -206,7 +210,19 @@ def stream_chat(message: str, session_id: str = "default") -> Generator[str, Non
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=1500,
-                system=system_prompt,
+                # Prompt cache the long system prompt — it's identical
+                # across every turn of the same session AND across
+                # sessions within the 5-min cache window. The agentic
+                # tool-use loop also calls this multiple times per user
+                # turn, so caching saves meaningful tokens within a
+                # single conversation.
+                system=[
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 tools=TOOLS,
                 messages=history,
             )

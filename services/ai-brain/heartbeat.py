@@ -24,6 +24,7 @@ depend on the heartbeat loop working.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -64,7 +65,15 @@ REDIS_KEY_ENABLED = "heartbeat:enabled"
 REDIS_KEY_LOCK = "heartbeat:running"
 REDIS_KEY_LAST_RUN = "heartbeat:last_run_at"
 REDIS_KEY_NEXT_RUN = "heartbeat:next_run_at"
+REDIS_KEY_LAST_HASH = "heartbeat:last_context_hash"
+REDIS_KEY_LAST_HASH_TS = "heartbeat:last_context_hash_ts"
 LOCK_TTL_SECONDS = 120  # longer than a single Opus call (~30-60s)
+
+# Hash-gating config — skip the Opus call entirely when the decision
+# signal is unchanged AND a decision is less than this many seconds old.
+# We still run Opus at least every HASH_MAX_SKIP_SECONDS even if the
+# hash matches, so slow-creeping state changes aren't missed.
+HASH_MAX_SKIP_SECONDS = 30 * 60  # 30 min hard ceiling
 
 # Guardrails
 CLOSE_COOLDOWN_MINUTES = 30
@@ -439,7 +448,19 @@ def _call_opus(context: dict) -> dict | None:
         response = client.messages.create(
             model=MODEL,
             max_tokens=2000,
-            system=SYSTEM_PROMPT,
+            # Prompt caching: the SYSTEM_PROMPT and tool schema don't change
+            # between ticks. Wrapping system as a cache-controlled block
+            # makes Anthropic bill cached input at 10% of normal rate on
+            # hits within the 5-min cache window. Since we tick every
+            # 15 min, we still get a cache hit on any burst of testing
+            # or back-to-back runs — and zero cost for hits that happen.
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             tools=[MANAGE_CAMPAIGNS_TOOL],
             tool_choice={"type": "tool", "name": "manage_campaigns"},
             messages=[{"role": "user", "content": user_prompt}],
@@ -685,6 +706,101 @@ def _execute_decision(
 
 
 # ---------------------------------------------------------------------------
+# Decision-signal hash — skip Opus when nothing materially changed
+# ---------------------------------------------------------------------------
+
+
+def _compute_decision_signal(context: dict) -> str:
+    """Build a stable hash of the parts of the context that would actually
+    change Opus's decision.
+
+    Deliberately bucketed so trivial drift (a $0.02 price move, a 0.3%
+    P/L wiggle) doesn't invalidate the cache. Excluded: the tick's own
+    timestamp, and any full-text free-form fields.
+
+    Included:
+      - Per campaign: id, side, TP (exact), SL (exact),
+        pnl_pct bucketed to 2%, layers_used.
+      - Latest unified score bucketed to 5.
+      - Current price bucketed to $0.50.
+      - Recent news count + the first news summary string (if any) so a
+        new headline flips the hash even if the count is unchanged.
+    """
+    def _bucket(val, step):
+        if val is None:
+            return None
+        try:
+            return round(float(val) / step) * step
+        except (TypeError, ValueError):
+            return None
+
+    signal: dict = {}
+
+    # Price bucket (round to $0.50)
+    signal["price_bucket"] = _bucket(context.get("current_price"), 0.5)
+
+    # Unified score bucket (round to 5)
+    scores = context.get("latest_scores") or {}
+    signal["unified_bucket"] = _bucket(scores.get("unified_score"), 5)
+
+    # Recent news — count + top summary prefix
+    news = context.get("recent_news") or []
+    signal["news_count"] = len(news)
+    signal["news_top"] = (news[0].get("summary", "")[:120] if news else "")
+
+    # Campaigns — the most important signal. Sort by id for stability.
+    camps = context.get("open_campaigns") or []
+    camp_sigs = []
+    for c in sorted(camps, key=lambda x: x.get("id", 0)):
+        camp_sigs.append({
+            "id": c.get("id"),
+            "side": c.get("side"),
+            "tp": c.get("take_profit"),
+            "sl": c.get("stop_loss"),
+            "pnl_pct_bucket": _bucket(c.get("unrealized_pnl_pct"), 2),
+            "layers": c.get("layers"),
+        })
+    signal["campaigns"] = camp_sigs
+
+    payload = json.dumps(signal, sort_keys=True, default=str)
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+
+def _should_skip_opus(new_hash: str) -> tuple[bool, dict]:
+    """Return (skip, detail). Skips if Redis stored hash matches AND the
+    stored decision is still fresh (< HASH_MAX_SKIP_SECONDS old)."""
+    try:
+        r = get_redis()
+        prev_hash = _redis_str(r.get(REDIS_KEY_LAST_HASH))
+        prev_ts_raw = _redis_str(r.get(REDIS_KEY_LAST_HASH_TS))
+        if not prev_hash or not prev_ts_raw:
+            return False, {"reason": "no prior hash"}
+        try:
+            prev_ts = float(prev_ts_raw)
+        except (TypeError, ValueError):
+            return False, {"reason": "bad stored ts"}
+        age = time.time() - prev_ts
+        if prev_hash == new_hash and age < HASH_MAX_SKIP_SECONDS:
+            return True, {"hash": new_hash, "age_seconds": round(age, 1)}
+        return False, {
+            "reason": "hash changed" if prev_hash != new_hash else "stored hash stale",
+            "age_seconds": round(age, 1),
+        }
+    except Exception:
+        logger.exception("Failed to read heartbeat hash gate")
+        return False, {"reason": "redis read failed"}
+
+
+def _store_decision_hash(new_hash: str) -> None:
+    try:
+        r = get_redis()
+        r.set(REDIS_KEY_LAST_HASH, new_hash)
+        r.set(REDIS_KEY_LAST_HASH_TS, str(time.time()))
+    except Exception:
+        logger.exception("Failed to store heartbeat hash")
+
+
+# ---------------------------------------------------------------------------
 # One full heartbeat tick
 # ---------------------------------------------------------------------------
 
@@ -715,6 +831,38 @@ def run_tick() -> dict:
             logger.info("Heartbeat: context has no open campaigns after build, skipping")
             return {"status": "flat_after_build", "ran_at": ran_at.isoformat()}
 
+        # --- Decision-signal hash gate ---
+        # Skip the expensive Opus call entirely when nothing materially
+        # changed since the last decision. The hash buckets price/pnl/
+        # score so trivial drift doesn't invalidate the cache, and has
+        # a 30-min hard ceiling so slow-creeping state is still caught.
+        #
+        # The -50% hard-stop (check_tp_sl_hits) runs INDEPENDENTLY on
+        # every score event in ai-brain/main.py, so skipping Opus here
+        # cannot degrade risk management — it just avoids re-asking the
+        # same question and getting the same answer for $0.30 a pop.
+        decision_hash = _compute_decision_signal(context)
+        skip, skip_detail = _should_skip_opus(decision_hash)
+        if skip:
+            duration = time.time() - tick_start
+            logger.info(
+                "Heartbeat: context hash unchanged (age %.0fs) — skipping Opus call",
+                skip_detail.get("age_seconds", 0),
+            )
+            _record_run(
+                ran_at, None, "skipped_unchanged",
+                f"hash={decision_hash[:12]} age={skip_detail.get('age_seconds')}s",
+                {"hash": decision_hash, **skip_detail},
+                True, duration,
+            )
+            return {
+                "status": "skipped_unchanged",
+                "ran_at": ran_at.isoformat(),
+                "duration_seconds": round(duration, 2),
+                "hash": decision_hash[:12],
+                "hash_age_seconds": skip_detail.get("age_seconds"),
+            }
+
         opus_out = _call_opus(context)
         duration = time.time() - tick_start
 
@@ -737,6 +885,11 @@ def run_tick() -> dict:
             (opus_out.get("overall_rationale") or "")[:1000],
             opus_out, True, duration,
         )
+
+        # Store the decision hash so the NEXT tick can skip if nothing
+        # material changed. Only update on successful runs — if Opus
+        # failed we want the next tick to retry immediately.
+        _store_decision_hash(decision_hash)
 
         return {
             "status": "ok",

@@ -40,7 +40,10 @@ from shared.config import settings
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-CACHE_TTL_SECONDS = 45
+# 3-minute cache — the market rarely changes meaningfully faster than that
+# for a mobile "what's the situation" summary. Previously 45s which was
+# aggressively expensive given the 30s frontend poll cadence.
+CACHE_TTL_SECONDS = 180
 
 _client: Anthropic | None = None
 _cache: dict | None = None

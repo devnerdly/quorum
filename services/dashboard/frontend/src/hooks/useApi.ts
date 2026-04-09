@@ -44,11 +44,44 @@ function useApi<T>(url: string, options: UseApiOptions = {}): UseApiResult<T> {
     setLoading(true);
     void fetchData();
 
-    if (pollInterval && pollInterval > 0) {
-      const id = setInterval(() => void fetchData(), pollInterval);
-      return () => clearInterval(id);
+    if (!pollInterval || pollInterval <= 0) {
+      return undefined;
     }
-    return undefined;
+
+    // Only poll when the tab is visible. Backgrounded tabs stop making
+    // network calls entirely (saves LLM tokens for Now Brief, Scalp Brain,
+    // etc.) and auto-refetch once on return to foreground so the user
+    // sees fresh data immediately.
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const startPolling = () => {
+      if (intervalId !== null) return;
+      intervalId = setInterval(() => void fetchData(), pollInterval);
+    };
+    const stopPolling = () => {
+      if (intervalId === null) return;
+      clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void fetchData(); // immediate refresh on return to foreground
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    if (document.visibilityState === "visible") {
+      startPolling();
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      stopPolling();
+    };
   }, [fetchData, pollInterval]);
 
   return { data, loading, error, refetch: fetchData };
