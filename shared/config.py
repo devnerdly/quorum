@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     fred_api_key: str = ""
     quandl_api_key: str = ""
     finnhub_api_key: str = ""
+    twelve_api_key: str = ""
     binance_api_key: str = ""
     binance_api_secret: str = ""
     binance_symbol: str = "CLUSDT"  # TRADIFI perpetual tracking NYMEX WTI front-month

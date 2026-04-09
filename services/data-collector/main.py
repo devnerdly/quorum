@@ -36,15 +36,15 @@ def main() -> None:
     logger.info("Database initialised.")
 
     # Import collectors after DB is initialised (avoids import-time DB calls)
-    from collectors.binance import collect_and_store as bn_collect
-    from collectors.binance_ws import start_binance_ws
     from collectors.binance_metrics import (
         collect_all_metrics as bn_metrics_all,
         collect_funding_rate as bn_funding,
     )
     from collectors.binance_liquidations_ws import start_liquidations_ws
-    from collectors.yahoo_wti import collect_and_store as yahoo_wti_collect
-    from collectors.cross_assets import collect_and_store as cross_assets_collect
+    from collectors.twelve_data_wti import collect_and_store as twelve_wti_collect
+    from collectors.twelve_data_cross_assets import (
+        collect_and_store as twelve_cross_assets_collect,
+    )
     from collectors.shipping import collect_and_store as shipping_collect
     from collectors.portwatch import collect_and_store as portwatch_collect
     from collectors.cot import collect_and_store as cot_collect
@@ -52,95 +52,64 @@ def main() -> None:
 
     scheduler = BlockingScheduler(timezone="UTC")
 
-    # --- Binance USD-M Futures jobs (CLUSDT TRADIFI_PERPETUAL — tracks NYMEX WTI) ---
-    # REST klines for historical backfill. The WebSocket worker (below) handles
-    # the live current-bar updates in real time.
+    # --- Twelve Data WTI/USD — SINGLE canonical price source ---
+    # Grow plan: 55 req/min, no daily limit, real-time commodity quotes,
+    # SLA. Replaces Yahoo CL=F (delayed, 429s) and Binance CLUSDT
+    # (TRADIFI perpetual drifts 1-3% from real NYMEX during off-hours).
     scheduler.add_job(
-        safe_run, "interval", minutes=1, args=[bn_collect, "1m", 500],
-        id="binance_1m", name="Binance 1m klines", max_instances=1, coalesce=True,
-    )
-    scheduler.add_job(
-        safe_run, "interval", minutes=5, args=[bn_collect, "5m", 500],
-        id="binance_5m", name="Binance 5m klines", max_instances=1, coalesce=True,
-    )
-    scheduler.add_job(
-        safe_run, "interval", minutes=15, args=[bn_collect, "15m", 500],
-        id="binance_15m", name="Binance 15m klines", max_instances=1, coalesce=True,
-    )
-    scheduler.add_job(
-        safe_run, "interval", hours=1, args=[bn_collect, "1h", 500],
-        id="binance_1h", name="Binance 1h klines", max_instances=1, coalesce=True,
-    )
-    scheduler.add_job(
-        safe_run, "interval", hours=4, args=[bn_collect, "4h", 500],
-        id="binance_4h", name="Binance 4h klines", max_instances=1, coalesce=True,
-    )
-    scheduler.add_job(
-        safe_run, "interval", hours=6, args=[bn_collect, "1d", 500],
-        id="binance_1d", name="Binance 1d klines", max_instances=1, coalesce=True,
-    )
-    scheduler.add_job(
-        safe_run, "interval", hours=24, args=[bn_collect, "1w", 200],
-        id="binance_1w", name="Binance 1w klines", max_instances=1, coalesce=True,
-    )
-
-    # WebSocket live stream — subscribes to kline_1m for real-time tick updates.
-    # Runs in a daemon background thread, not on the scheduler.
-    start_binance_ws()
-    start_liquidations_ws()
-
-    # --- Yahoo CL=F (PRIMARY price feed — matches XTB OIL.WTI) ---
-    # NYMEX WTI front-month future, pulled via yfinance. The Binance
-    # CLUSDT perpetual (collected above) drifts 1-3% from real NYMEX
-    # during low-liquidity hours, so we use Yahoo for all scoring /
-    # chart / scalping decisions and keep Binance only for funding,
-    # open interest, liquidations, and other derivatives metrics.
-    scheduler.add_job(
-        safe_run, "interval", minutes=1, args=[yahoo_wti_collect, "1m", "1d"],
-        id="yahoo_wti_1m", name="Yahoo CL=F 1-min",
+        safe_run, "interval", minutes=1, args=[twelve_wti_collect, "1min", 500],
+        id="twelve_wti_1m", name="Twelve Data WTI 1-min",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        safe_run, "interval", minutes=5, args=[yahoo_wti_collect, "5m", "5d"],
-        id="yahoo_wti_5m", name="Yahoo CL=F 5-min",
+        safe_run, "interval", minutes=5, args=[twelve_wti_collect, "5min", 500],
+        id="twelve_wti_5m", name="Twelve Data WTI 5-min",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        safe_run, "interval", minutes=15, args=[yahoo_wti_collect, "15m", "5d"],
-        id="yahoo_wti_15m", name="Yahoo CL=F 15-min",
+        safe_run, "interval", minutes=15, args=[twelve_wti_collect, "15min", 500],
+        id="twelve_wti_15m", name="Twelve Data WTI 15-min",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        safe_run, "interval", hours=1, args=[yahoo_wti_collect, "1h", "5d"],
-        id="yahoo_wti_1h", name="Yahoo CL=F 1-hour",
+        safe_run, "interval", hours=1, args=[twelve_wti_collect, "1h", 500],
+        id="twelve_wti_1h", name="Twelve Data WTI 1-hour",
         max_instances=1, coalesce=True,
     )
     scheduler.add_job(
-        safe_run, "interval", hours=6, args=[yahoo_wti_collect, "1d", "1mo"],
-        id="yahoo_wti_1d", name="Yahoo CL=F 1-day",
+        safe_run, "interval", hours=6, args=[twelve_wti_collect, "1day", 200],
+        id="twelve_wti_1d", name="Twelve Data WTI 1-day",
         max_instances=1, coalesce=True,
     )
 
-    # --- Binance derived metrics (OI, funding, long/short, taker flow) ---
-    # Fast-cadence metrics: every 5 min.
+    # --- Cross-asset context via Twelve Data (ETF proxies) ---
+    # Same feed as the main price data, keeps the project on a single
+    # paid data vendor. Symbols: UUP (DXY), SPY (SPX), XAU/USD (Gold),
+    # BTC/USD (Bitcoin), VIXY (VIX).
+    scheduler.add_job(
+        safe_run, "interval", minutes=15, args=[twelve_cross_assets_collect, "1h", 200],
+        id="twelve_cross_assets", name="Twelve Data cross-asset context",
+        max_instances=1, coalesce=True,
+    )
+
+    # --- Binance derivatives metrics (unique Binance data — KEPT) ---
+    # These are the ONE thing Twelve Data can't replace: funding rate,
+    # open interest, long/short ratios, and the live liquidation stream.
+    # We do NOT write Binance klines to OHLCV anymore — the chart and
+    # all price decisions use Twelve Data only.
     scheduler.add_job(
         safe_run, "interval", minutes=5, args=[bn_metrics_all],
         id="binance_metrics", name="Binance derived metrics (OI/LSR/taker)",
         max_instances=1, coalesce=True,
     )
-    # Funding rate: rarely changes (8h exchange cadence), poll every 30 min.
     scheduler.add_job(
         safe_run, "interval", minutes=30, args=[bn_funding, 500],
         id="binance_funding", name="Binance funding rate history",
         max_instances=1, coalesce=True,
     )
 
-    # Cross-asset context (DXY / SPX / Gold / BTC / VIX) — 15 min cadence
-    scheduler.add_job(
-        safe_run, "interval", minutes=15, args=[cross_assets_collect, "1h", "5d"],
-        id="cross_assets", name="Cross-asset correlations",
-        max_instances=1, coalesce=True,
-    )
+    # Liquidation stream — reconnecting WS worker in background thread
+    start_liquidations_ws()
 
     # --- Yahoo Finance DISABLED — replaced by Binance CLUSDT (better data) ---
     # collectors/yahoo.py kept in repo as reference only. See commit that
@@ -184,33 +153,22 @@ def main() -> None:
     for job in scheduler.get_jobs():
         logger.info("  • %s (id=%s, trigger=%s)", job.name, job.id, job.trigger)
 
-    # Warm up: immediately fetch all timeframes so the dashboard and analyzer
-    # have data on first load. Binance klines come back quickly (<1s each).
-    logger.info("Warming up — fetching Binance CLUSDT klines 1m/5m/15m/1h/4h/1d/1w …")
-    safe_run(bn_collect, "1m", 1000)
-    safe_run(bn_collect, "5m", 1000)
-    safe_run(bn_collect, "15m", 1000)
-    safe_run(bn_collect, "1h", 1000)
-    safe_run(bn_collect, "4h", 500)
-    safe_run(bn_collect, "1d", 500)
-    safe_run(bn_collect, "1w", 200)
+    # Warm up Twelve Data WTI (single canonical price feed)
+    logger.info("Warming up Twelve Data WTI feed …")
+    safe_run(twelve_wti_collect, "1min", 500)
+    safe_run(twelve_wti_collect, "5min", 500)
+    safe_run(twelve_wti_collect, "15min", 500)
+    safe_run(twelve_wti_collect, "1h", 500)
+    safe_run(twelve_wti_collect, "1day", 200)
 
-    # Warm up Binance derived metrics
-    logger.info("Warming up Binance metrics (OI, LSR, taker, funding) …")
+    # Warm up Twelve Data cross-asset context (UUP, SPY, XAU/USD, BTC/USD, VIXY)
+    logger.info("Warming up Twelve Data cross-asset feed …")
+    safe_run(twelve_cross_assets_collect, "1h", 200)
+
+    # Warm up Binance derivatives metrics (funding, OI, L/S ratios)
+    logger.info("Warming up Binance derivatives metrics …")
     safe_run(bn_funding, 500)
     safe_run(bn_metrics_all)
-
-    # Warm up Yahoo CL=F (primary WTI price feed)
-    logger.info("Warming up Yahoo CL=F feed …")
-    safe_run(yahoo_wti_collect, "1m", "1d")
-    safe_run(yahoo_wti_collect, "5m", "5d")
-    safe_run(yahoo_wti_collect, "15m", "5d")
-    safe_run(yahoo_wti_collect, "1h", "5d")
-    safe_run(yahoo_wti_collect, "1d", "1mo")
-
-    # Warm up cross-asset collectors (DXY / SPX / Gold / BTC / VIX)
-    logger.info("Warming up cross-asset collectors …")
-    safe_run(cross_assets_collect, "1h", "5d")
 
     # Warm up macro / shipping collectors so the analyzer has fundamental
     # and shipping data on first cycle (instead of waiting hours).

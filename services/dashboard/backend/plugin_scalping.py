@@ -108,7 +108,7 @@ def compute_scalping_range(
         bars = (
             session.query(OHLCV)
             .filter(
-                OHLCV.source == "yahoo",
+                OHLCV.source == "twelve",
                 OHLCV.timeframe == timeframe,
                 OHLCV.timestamp >= since,
             )

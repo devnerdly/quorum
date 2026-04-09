@@ -67,23 +67,28 @@ def _store_liquidation(order: dict) -> dict | None:
         avg_price = float(order.get("ap") or price)
         quote_qty = executed_qty * avg_price
 
-        row = BinanceLiquidation(
-            symbol=order["s"],
-            timestamp=ts,
-            side=order["S"],
-            price=price,
-            orig_qty=orig_qty,
-            executed_qty=executed_qty,
-            quote_qty_usd=quote_qty,
-            avg_price=avg_price,
-            order_status=order.get("X"),
-        )
+        # Capture fields into plain values BEFORE persistence so we can
+        # build the summary without touching the SQLAlchemy row after
+        # the session closes (which would raise DetachedInstanceError).
+        summary_symbol = order["s"]
+        summary_side = order["S"]
     except (KeyError, ValueError, TypeError) as exc:
         logger.warning("Malformed forceOrder payload: %s (%s)", order, exc)
         return None
 
     try:
         with SessionLocal() as session:
+            row = BinanceLiquidation(
+                symbol=summary_symbol,
+                timestamp=ts,
+                side=summary_side,
+                price=price,
+                orig_qty=orig_qty,
+                executed_qty=executed_qty,
+                quote_qty_usd=quote_qty,
+                avg_price=avg_price,
+                order_status=order.get("X"),
+            )
             session.add(row)
             session.commit()
     except Exception:
@@ -91,10 +96,10 @@ def _store_liquidation(order: dict) -> dict | None:
         return None
 
     return {
-        "symbol": row.symbol,
-        "side": row.side,
-        "price": row.price,
-        "quote_qty_usd": row.quote_qty_usd,
+        "symbol": summary_symbol,
+        "side": summary_side,
+        "price": price,
+        "quote_qty_usd": quote_qty,
         "timestamp": ts.isoformat(),
     }
 

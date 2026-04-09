@@ -213,12 +213,12 @@ def get_ohlcv(
     timeframe: str = Query(default="1H"),
     limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict[str, Any]:
-    """Return OHLCV bars suitable for Lightweight Charts (Binance CLUSDT only)."""
+    """Return OHLCV bars from Twelve Data (canonical WTI feed)."""
     db = SessionLocal()
     try:
         rows = (
             db.query(OHLCV)
-            .filter(OHLCV.timeframe == timeframe, OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == timeframe, OHLCV.source == "twelve")
             .order_by(desc(OHLCV.timestamp))
             .limit(limit)
             .all()
@@ -231,7 +231,7 @@ def get_ohlcv(
             and r.low is not None and r.close is not None
         ]
         ordered = sorted(valid, key=lambda r: r.timestamp)
-        return {"data": [_ohlcv_to_dict(r) for r in ordered]}
+        return {"data": [_ohlcv_to_dict(r) for r in ordered], "source": "twelve"}
     finally:
         db.close()
 
@@ -749,7 +749,7 @@ def get_volume_profile(
         rows = (
             session.query(OHLCV)
             .filter(
-                OHLCV.source == "yahoo",
+                OHLCV.source == "twelve",
                 OHLCV.timeframe == timeframe,
                 OHLCV.timestamp >= since,
             )
@@ -762,6 +762,11 @@ def get_volume_profile(
 
     prices = [(r.high + r.low + r.close) / 3 for r in rows]  # typical price
     vols = [r.volume or 0.0 for r in rows]
+    # Twelve Data commodity feeds return no volume — fall back to
+    # equal-weight "time at price" histogram so the POC still reflects
+    # where price spent the most time.
+    if sum(vols) == 0:
+        vols = [1.0] * len(rows)
     p_min = min(prices)
     p_max = max(prices)
     if p_max <= p_min:

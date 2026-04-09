@@ -32,31 +32,27 @@ logger = logging.getLogger(__name__)
 # Price helpers
 # ---------------------------------------------------------------------------
 
+PRICE_SOURCE: str = "twelve"  # single canonical price source (Twelve Data WTI/USD)
+
+
 def get_current_price() -> float | None:
-    """Return the most recent WTI close (Binance CLUSDT)."""
+    """Return the most recent 1-min WTI close from Twelve Data."""
     with SessionLocal() as session:
         row = (
             session.query(OHLCV)
-            .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == "1min", OHLCV.source == PRICE_SOURCE)
             .order_by(OHLCV.timestamp.desc())
             .first()
         )
-        if row is None:
-            row = (
-                session.query(OHLCV)
-                .filter(OHLCV.timeframe == "1min")
-                .order_by(OHLCV.timestamp.desc())
-                .first()
-            )
         return float(row.close) if row else None
 
 
 def get_current_bar() -> tuple[float, float, float] | None:
-    """Return (high, low, close) of the latest Yahoo 1-min bar."""
+    """Return (high, low, close) of the newest 1-min WTI bar."""
     with SessionLocal() as session:
         row = (
             session.query(OHLCV)
-            .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+            .filter(OHLCV.timeframe == "1min", OHLCV.source == PRICE_SOURCE)
             .order_by(OHLCV.timestamp.desc())
             .first()
         )

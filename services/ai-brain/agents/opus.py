@@ -134,7 +134,7 @@ def _get_current_price() -> float | None:
         with SessionLocal() as session:
             row = (
                 session.query(OHLCV)
-                .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+                .filter(OHLCV.timeframe == "1min", OHLCV.source == "twelve")
                 .order_by(OHLCV.timestamp.desc())
                 .first()
             )
@@ -161,7 +161,7 @@ def get_market_snapshot() -> dict:
         with SessionLocal() as session:
             latest = (
                 session.query(OHLCV)
-                .filter(OHLCV.timeframe == "1min", OHLCV.source == "yahoo")
+                .filter(OHLCV.timeframe == "1min", OHLCV.source == "twelve")
                 .order_by(OHLCV.timestamp.desc())
                 .first()
             )

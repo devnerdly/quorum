@@ -56,12 +56,18 @@ def _load_series(label: str, hours: int) -> list[tuple[datetime, float]]:
 
 
 def _load_clusdt_series(hours: int) -> list[tuple[datetime, float]]:
+    """Load the canonical WTI price series for cross-asset correlation.
+
+    Historically this read Binance CLUSDT klines; now reads Twelve Data
+    WTI/USD (source='twelve') since that's the single canonical feed.
+    Kept the legacy name so existing callers don't break.
+    """
     since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
     with SessionLocal() as session:
         rows = (
             session.query(OHLCV)
             .filter(
-                OHLCV.source == "binance",
+                OHLCV.source == "twelve",
                 OHLCV.timeframe == "1H",
                 OHLCV.timestamp >= since,
             )
