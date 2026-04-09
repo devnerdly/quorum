@@ -140,6 +140,139 @@ Plus: **Positions**, **Signal History**, **@marketfeed digest panel**, **Chat pa
 - **Historical Pattern Matching** — weighted Euclidean distance in feature space over accumulated signal snapshots, returns forward-return distribution of the closest N moments.
 - **Signal Performance Tracker** — per-feature bucket stats showing whether signals actually predict forward returns.
 
+### LLM models used
+
+| Model | Where | What it does |
+|---|---|---|
+| **Claude Opus 4.6** (`claude-opus-4-6`) | chat backend, committee judge, AI brain strategist | Primary reasoning agent with full tool access; emits trading recommendations via Anthropic tools API |
+| **Claude Sonnet 4.6** (`claude-sonnet-4-6`) | committee specialists | Six parallel agents (3 bull + 3 bear) running adversarial debates on full 22-source context |
+| **Claude Haiku 4.5** (`claude-haiku-4-5`) | @marketfeed classifier, AI brain summary, Now Brief | High-volume cheap classification: Telegram digest categorisation, 45s-cached synthesis brief |
+| **Grok 3** (`grok-3`, via x.ai OpenAI-compatible endpoint) | ai-brain Twitter agent | Real-time Twitter/X narrative summariser with built-in web access |
+
+---
+
+## LLM tools catalogue
+
+The chat/committee/brain agents talk to the database and external APIs through a plugin system. Each `plugin_*.py` file in `services/dashboard/backend/` registers a `PLUGIN_TOOLS` list and an `execute()` dispatcher; all tools are auto-merged into the single `TOOLS` array passed to Claude on every turn.
+
+Below is every tool the LLM can invoke, grouped by category. **Write tools** (that mutate state, send messages, or place simulated orders) are marked ⚠️.
+
+### Market state & price data
+
+| Tool | Description |
+|---|---|
+| `get_current_market_state` | Snapshot: latest CLUSDT price, all 5 sub-scores, top 3 knowledge digests, open positions, latest AI recommendation. First call before any "should I…" question. |
+| `get_price_history` | OHLCV bars for a given timeframe (1m/5m/15m/1h/1d/1w) with optional limit. |
+| `get_vwap` | Volume-weighted average price for a timeframe and lookback window (typically 1H / 24h). |
+| `get_support_resistance` | Key S/R levels derived from 1H swing-high/low analysis. |
+| `get_pivot_points` | Classic daily pivot P/R1/R2/S1/S2 plus current price position relative to them. |
+| `get_correlation` | Rolling Pearson correlation between CLUSDT and another instrument over a window. |
+
+### Account, campaigns & positions
+
+| Tool | Description |
+|---|---|
+| `get_account_state` | Full account row: equity, cash, margin, free margin, drawdown, hard stop distance. |
+| `get_open_positions` | List of every open position with live PnL and margin. |
+| `get_campaigns` | Campaigns filtered by status (open / closed_*) with per-layer totals. |
+| `get_campaign_detail` | Full state for one campaign: avg entry, layers used, DCA preview table, max loss bar. |
+| `get_campaign_pnl_history` | Time series of equity PnL for a closed or still-open campaign. |
+| `get_performance_summary` | Aggregate journal stats: win rate, profit factor, avg win/loss, Sharpe-like. |
+| `review_closed_campaign` | LLM-readable post-mortem summary of a closed campaign with entry/exit snapshots. |
+| ⚠️ `open_new_campaign` | Opens a new LONG or SHORT campaign with the first DCA layer. One-at-a-time enforced. |
+| ⚠️ `add_dca_layer` | Scales into an existing campaign with the next layer from the DCA schedule. |
+| ⚠️ `close_campaign` | Closes all open layers in a campaign at current market. |
+| ⚠️ `partial_close_campaign` | Closes a % of open layers, oldest-first. |
+| ⚠️ `update_campaign_limits` | Updates `max_loss_pct` on a live campaign. |
+| ⚠️ `update_campaign_tp` | Sets/clears the campaign-level take-profit price. |
+| ⚠️ `add_campaign_note` | Appends free-form text to a campaign's notes field. |
+
+### Signals, scoring & recommendations
+
+| Tool | Description |
+|---|---|
+| `get_recent_signals` | Last N `AIRecommendation` rows from the analyzer/strategist pipeline. |
+| `get_signal_detail` | Full JSON payload for one signal: all sub-scores, reasoning text, entry/SL/TP. |
+| `compute_optimal_sl_tp` | Given an entry and side, compute ATR-based stop-loss and take-profit levels. |
+
+### Risk & scenario tools
+
+| Tool | Description |
+|---|---|
+| `simulate_trade` | What-if calculator: given side/entry/lots/SL/TP, reports resulting PnL at target levels, nominal exposure, and free margin consumed. |
+| `stress_test_campaign` | Runs current campaigns through 5 adverse price-move scenarios (−1% / −3% / −5% / −10% / custom) and reports margin level, hard-stop distance, and survival. |
+
+### Knowledge, news & sentiment
+
+| Tool | Description |
+|---|---|
+| `query_marketfeed` | Recent @marketfeed 5-minute digests with headline, key events, sentiment score/label. |
+
+### Analytics & system health
+
+| Tool | Description |
+|---|---|
+| `get_upcoming_events` | 7-day economic calendar: EIA weekly, FOMC, OPEC MOMR, IEA reports with importance and countdown. |
+| `get_system_health` | Per-source staleness map: OHLCV freshness, macro freshness, sentiment freshness. |
+| `get_data_sources_status` | Extended health with cadence metadata: expected interval, stale-after seconds, next fetch time. |
+| `get_llm_cost_today` | Running Anthropic/xAI token usage + estimated USD spend for the current day. |
+
+### Alerts
+
+| Tool | Description |
+|---|---|
+| `list_active_alerts` | All user-configured alerts currently in `active` state. |
+| ⚠️ `set_price_alert` | Create a price-crosses-threshold alert (above/below). |
+| ⚠️ `set_keyword_watch` | Create a keyword alert that fires when the keyword appears in a marketfeed digest or RSS headline. |
+| ⚠️ `set_score_alert` | Create a score-component alert (unified / technical / sentiment / shipping above/below/crosses a threshold). |
+| ⚠️ `cancel_alert` | Cancel an alert by id. |
+
+### Live monitoring
+
+| Tool | Description |
+|---|---|
+| `get_active_watch` | Returns the currently-active live-watch session (if any) with tick count and last verdict. |
+| ⚠️ `start_live_watch` | Starts a live monitoring session for N minutes; the bot posts a single Telegram message that updates itself every `cycle_seconds` with price / score delta / running verdict. |
+| ⚠️ `stop_live_watch` | Ends an active watch session early. |
+
+### Deep research
+
+| Tool | Description |
+|---|---|
+| `committee_debate` | Runs the full 6-agent adversarial committee (3 bulls + 3 bears + Opus judge). Takes 25–45s, costs ~$0.20. Returns per-agent cases, judge verdict, deterministic R:R, and win-condition flags. |
+| `deep_dive_entry_analysis` | Deep-research tool that combines technical + fundamental + sentiment + microstructure + scenario calculator output into a single structured recommendation for a hypothetical entry. |
+| `web_search` | DuckDuckGo search for oil/macro news (SSRF-guarded). |
+| `fetch_url` | Fetches and text-extracts a public URL with BeautifulSoup. Guarded by DNS-resolving allowlist that blocks loopback, private, link-local, cloud metadata, and multicast ranges. |
+
+### Memory (across conversations)
+
+| Tool | Description |
+|---|---|
+| ⚠️ `remember_fact` | Persists a free-form fact to the `facts` table with a category label; retrievable later. |
+| `recall_facts` | Returns stored facts, optionally filtered by category. Used by the bot to remember user preferences, prior decisions, standing rules. |
+
+### Plugin architecture
+
+Adding a new tool is a 3-step change:
+
+1. Create `services/dashboard/backend/plugin_<name>.py` with:
+   ```python
+   PLUGIN_TOOLS: list[dict] = [{
+       "name": "my_tool",
+       "description": "what it does",
+       "input_schema": {...JSON schema...},
+   }]
+
+   def execute(name: str, tool_input: dict) -> dict | None:
+       if name == "my_tool":
+           return _my_tool(**tool_input)
+       return None
+   ```
+2. Add `import plugin_<name>` to `services/dashboard/backend/chat.py` and append to `_PLUGINS`.
+3. Restart the dashboard — the tool is now available to every chat turn (dashboard + Telegram bot) and can be used by the committee specialists via their own context fetch.
+
+The same plugin files also expose helper functions that are called directly (not via LLM) by background workers, API endpoints, and the committee context builder.
+
 ### Trading logic
 
 - **DCA campaigns** — layered margin `[3k, 6k, 10k, 20k, 30k, 30k]` USD on a $100k starting balance at x10 leverage (defaults in `shared/sizing.py`)
