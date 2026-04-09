@@ -45,7 +45,11 @@ BREAKING_NEWS_THRESHOLD = 0.5
 
 # Minimum confidence required to open a new position.
 # Prevents stacking positions when Opus is uncertain or stuck in a loop.
-MIN_OPEN_CONFIDENCE = 0.65
+# Lowered from 0.65 -> 0.55 after review: 0.65 was blocking ~95% of non-extreme
+# setups that would still have been valid discretionary entries. With 0.55 we
+# catch setups like "BUY 0.58 score 18 with bullish breaking news" that were
+# being silently skipped during quiet regimes.
+MIN_OPEN_CONFIDENCE = 0.55
 
 # --- Task 3: Score cache — skip LLM cycle when scores are flat ---
 _last_processed_scores: dict | None = None
@@ -55,16 +59,28 @@ _SCORE_DELTA_THRESHOLD = 5.0  # on -100..+100 scale
 
 
 def _should_publish_recommendation(rec: dict) -> bool:
-    """Return True if the recommendation is materially different from the previous one.
+    """Return True if the recommendation should be pushed to the Redis
+    stream (and thus to Telegram).
 
-    Suppresses publish when action, unified_score (±10), and confidence (±0.10)
-    are all unchanged within the last 30 minutes.
+    The old behaviour gated on same-action + score delta < 10 + confidence
+    delta < 0.10 over a 30-min window — which effectively suppressed
+    almost every same-direction signal during quiet regimes (e.g. 50
+    BUY signals in a row would only publish once). Users reported only
+    seeing marketfeed digests on Telegram, never the signals themselves.
+
+    New behaviour — publish if ANY of:
+      - Action changed vs the last published signal
+      - Actionable signal (BUY/SELL/LONG/SHORT) with confidence rising
+        by >= 0.05 (so gradual conviction upgrades DO show up)
+      - 20+ minutes elapsed since the last publish of this action
+        (heartbeat for the current regime, at most one per 20 min)
+    Only pure WAIT↔HOLD churn at similar confidence is suppressed.
     """
     from shared.models.base import SessionLocal
     from shared.models.signals import AIRecommendation
     from sqlalchemy import desc
 
-    cutoff = datetime.now(tz=timezone.utc) - timedelta(minutes=30)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=2)
     try:
         with SessionLocal() as session:
             prev = (
@@ -75,16 +91,27 @@ def _should_publish_recommendation(rec: dict) -> bool:
             )
             if prev is None:
                 return True
-            if prev.action != rec.get("action"):
+
+            new_action = (rec.get("action") or "").upper()
+            prev_action = (prev.action or "").upper()
+
+            # 1. Action changed — always publish
+            if prev_action != new_action:
                 return True
-            prev_score = prev.unified_score or 0
-            new_score = rec.get("unified_score") or 0
-            if abs(new_score - prev_score) >= 10:
-                return True
+
+            # 2. Actionable signal with confidence upgrade
+            is_actionable = new_action in ("BUY", "SELL", "LONG", "SHORT")
             prev_conf = prev.confidence or 0
             new_conf = rec.get("confidence") or 0
-            if abs(new_conf - prev_conf) >= 0.10:
+            if is_actionable and (new_conf - prev_conf) >= 0.05:
                 return True
+
+            # 3. Heartbeat — at most one publish per 20 min even during
+            #    long same-direction runs
+            age = datetime.now(tz=timezone.utc) - prev.timestamp
+            if age >= timedelta(minutes=20):
+                return True
+
             return False
     except Exception:
         logger.exception("signal_change_gate failed, defaulting to publish")
@@ -408,17 +435,37 @@ def process_breaking_news(digest: dict) -> None:
         c for c in open_campaigns
         if str(c.get("side", "")).upper() != digest_side
     ]
-    if not conflicts:
-        logger.info(
-            "Breaking news (sentiment=%+.2f, favors %s) — no conflicting open campaigns, no action",
+    same_side_open = [
+        c for c in open_campaigns
+        if str(c.get("side", "")).upper() == digest_side
+    ]
+
+    if not conflicts and not open_campaigns:
+        # No positions at all — and the news is high-impact. Run an urgent
+        # cycle so Opus can decide whether to OPEN a new campaign on the
+        # back of this news. Previous behaviour was to do nothing, which
+        # meant the bot stayed flat through every strong bullish headline
+        # unless there was already a (conflicting) bearish position to
+        # manage. Now we proactively evaluate entries too.
+        logger.warning(
+            "🚨 BREAKING NEWS — sentiment=%+.2f favors %s, NO open campaigns — "
+            "triggering urgent Opus reassessment for potential entry",
             sentiment_score, digest_side,
         )
+        # Fall through to the synthetic-scores cycle below.
+    elif not conflicts:
+        # Same-side positions already exist — the news CONFIRMS them, no
+        # need to rerun Opus just to restate the thesis.
+        logger.info(
+            "Breaking news (sentiment=%+.2f, favors %s) — %d same-side campaign(s) already open, no action",
+            sentiment_score, digest_side, len(same_side_open),
+        )
         return
-
-    logger.warning(
-        "🚨 BREAKING NEWS — sentiment=%+.2f favors %s, %d conflicting open campaign(s) — triggering urgent Opus reassessment",
-        sentiment_score, digest_side, len(conflicts),
-    )
+    else:
+        logger.warning(
+            "🚨 BREAKING NEWS — sentiment=%+.2f favors %s, %d conflicting open campaign(s) — triggering urgent Opus reassessment",
+            sentiment_score, digest_side, len(conflicts),
+        )
 
     # Build a synthetic "scores" event mirroring whatever the analyzer last
     # published, but force the LLM cycle to run regardless of the cache.

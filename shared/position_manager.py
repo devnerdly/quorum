@@ -450,6 +450,15 @@ def open_new_campaign(side: str, current_price: float) -> int:
         "Opened campaign #%s %s @ %.2f (layer 0, lots=%.4f, margin=%.0f)",
         campaign_id, side_norm, current_price, lots, margin,
     )
+
+    # Capture entry snapshot for the trade journal (best-effort — never
+    # let snapshot persistence break campaign open).
+    try:
+        from shared.trade_snapshot import attach_entry_snapshot
+        attach_entry_snapshot(campaign_id, reason="campaign_open")
+    except Exception:
+        logger.exception("entry snapshot failed for campaign #%s", campaign_id)
+
     return campaign_id
 
 
@@ -547,6 +556,14 @@ def close_campaign(campaign_id: int, status: str, notes: str | None = None) -> d
         "Closed campaign #%s status=%s total_pnl=%+.2f positions=%d",
         campaign_id, status, total_pnl, len(closed_snaps),
     )
+
+    # Capture exit snapshot for the trade journal. Best-effort — a broken
+    # snapshot must not break the close.
+    try:
+        from shared.trade_snapshot import attach_exit_snapshot
+        attach_exit_snapshot(campaign_id, reason=f"{status}:{notes or ''}"[:120])
+    except Exception:
+        logger.exception("exit snapshot failed for campaign #%s", campaign_id)
 
     # Return the campaign state snapshot
     result = compute_campaign_state(campaign_id, current_price)
