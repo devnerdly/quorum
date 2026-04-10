@@ -1014,6 +1014,21 @@ def get_liquidations(
 
 
 # ---------------------------------------------------------------------------
+# Market Hours
+# ---------------------------------------------------------------------------
+
+@app.get("/api/market-hours")
+def get_market_hours_endpoint() -> dict[str, Any]:
+    """Is the WTI market open right now?"""
+    try:
+        from shared.market_hours import market_status
+        return {"data": market_status()}
+    except Exception as exc:
+        logger.exception("market-hours endpoint failed")
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # Range Bias — 30-day dynamic range position
 # ---------------------------------------------------------------------------
 

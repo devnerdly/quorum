@@ -213,9 +213,16 @@ def _scan_triggered() -> None:
 
 def run_watcher_loop() -> None:
     """Background loop — scan pending theses every WATCHER_INTERVAL_SECONDS."""
-    logger.info("Theses watcher starting (interval=%ds)", WATCHER_INTERVAL_SECONDS)
-    time.sleep(20)  # let other workers boot first
+    logger.info("Theses watcher starting (interval=%ds, pauses when market closed)", WATCHER_INTERVAL_SECONDS)
+    time.sleep(20)
     while True:
+        try:
+            from shared.market_hours import is_market_open
+            if not is_market_open():
+                time.sleep(300)
+                continue
+        except Exception:
+            pass
         try:
             _scan_pending()
         except Exception:
@@ -225,9 +232,16 @@ def run_watcher_loop() -> None:
 
 def run_resolver_loop() -> None:
     """Background loop — resolve triggered theses every RESOLVER_INTERVAL_SECONDS."""
-    logger.info("Theses resolver starting (interval=%ds)", RESOLVER_INTERVAL_SECONDS)
-    time.sleep(45)  # offset from watcher so they don't contend
+    logger.info("Theses resolver starting (interval=%ds, pauses when market closed)", RESOLVER_INTERVAL_SECONDS)
+    time.sleep(45)
     while True:
+        try:
+            from shared.market_hours import is_market_open
+            if not is_market_open():
+                time.sleep(300)
+                continue
+        except Exception:
+            pass
         try:
             _scan_triggered()
         except Exception:

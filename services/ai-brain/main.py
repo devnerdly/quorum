@@ -746,9 +746,13 @@ def main() -> None:
     # the visibility guard pauses frontend polling.
     def _scalper_poller():
         import httpx
+        from shared.market_hours import is_market_open
         _time.sleep(60)  # let dashboard boot
-        logger.info("Scalper poller started (30s cadence)")
+        logger.info("Scalper poller started (30s cadence, pauses when market closed)")
         while True:
+            if not is_market_open():
+                _time.sleep(300)  # sleep 5 min when market closed
+                continue
             try:
                 httpx.get("http://dashboard:8000/api/scalp-brain", timeout=15)
             except Exception:

@@ -1562,6 +1562,21 @@ def run_worker_loop() -> None:
     time.sleep(30)
 
     while True:
+        # --- MARKET HOURS CHECK ---
+        # When WTI is closed (weekends Fri 22:00 → Sun 22:00 UTC), the
+        # heartbeat sleeps for 5 min between checks instead of running
+        # Opus. No tokens wasted on a closed market. The TP/SL check
+        # still runs (it's the first thing in run_tick) so positions
+        # are protected even during off-hours.
+        try:
+            from shared.market_hours import is_market_open
+            if not is_market_open():
+                logger.info("Heartbeat: market closed — sleeping 5 min (no Opus)")
+                time.sleep(300)
+                continue
+        except Exception:
+            pass  # if market_hours check fails, keep running
+
         hot = is_hot_window_active()
         tick_interval = HOT_TICK_INTERVAL_SECONDS if hot else HEARTBEAT_INTERVAL_SECONDS
 
