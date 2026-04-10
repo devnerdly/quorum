@@ -745,12 +745,12 @@ def main() -> None:
     # or nobody is viewing it. Without this, the scalper goes blind when
     # the visibility guard pauses frontend polling.
     def _scalper_poller():
-        import requests as _req
+        import httpx
         _time.sleep(60)  # let dashboard boot
         logger.info("Scalper poller started (30s cadence)")
         while True:
             try:
-                _req.get("http://dashboard:8000/api/scalp-brain", timeout=15)
+                httpx.get("http://dashboard:8000/api/scalp-brain", timeout=15)
             except Exception:
                 pass  # dashboard might be restarting
             _time.sleep(30)
