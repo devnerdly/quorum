@@ -22,6 +22,7 @@ from shared.sizing import (
     DCA_DRAWDOWN_TRIGGER_PCT,
     HARD_STOP_DRAWDOWN_PCT,
     lots_from_margin,
+    max_layers as sizing_max_layers,
     next_layer_margin,
 )
 
@@ -395,7 +396,8 @@ def compute_campaign_state(campaign_id: int, current_price: float | None = None)
             unrealised_pnl_pct = 0.0
 
         campaign_multiplier = float(campaign.size_multiplier or 1.0)
-        next_margin = next_layer_margin(layers_used, multiplier=campaign_multiplier)
+        campaign_persona = campaign.persona or "main"
+        next_margin = next_layer_margin(layers_used, multiplier=campaign_multiplier, persona=campaign_persona)
 
         positions_data = [_position_to_layer_dict(p, current_price) for p in open_pos]
 
@@ -449,7 +451,7 @@ def compute_campaign_state(campaign_id: int, current_price: float | None = None)
             "total_margin": round(total_margin, 2),
             "total_nominal": round(total_nominal, 2),
             "layers_used": layers_used,
-            "max_layers": len(DCA_LAYERS_MARGIN),
+            "max_layers": sizing_max_layers(campaign_persona),
             "next_layer_margin": next_margin,
             "take_profit": campaign.take_profit,
             "stop_loss": campaign.stop_loss,
@@ -660,7 +662,7 @@ def open_new_campaign(
         apply_equity_cap,
         compute_size_multiplier,
     )
-    from shared.sizing import DCA_LAYERS_MARGIN_BASE
+    from shared.sizing import _schedule_for_persona
 
     side_norm = side.upper()
     if side_norm not in ("LONG", "SHORT"):
@@ -679,7 +681,7 @@ def open_new_campaign(
         llm_confidence=llm_confidence,
     )
 
-    base_margin = DCA_LAYERS_MARGIN_BASE[0]
+    base_margin = _schedule_for_persona(persona)[0]
     raw_margin = base_margin * multiplier
 
     # Equity safety net
@@ -775,19 +777,20 @@ def add_dca_layer(campaign_id: int, current_price: float) -> int | None:
 
         campaign_side = campaign.side  # read while session is open
         campaign_multiplier = float(campaign.size_multiplier or 1.0)
+        campaign_persona = campaign.persona or "main"
         layers_used = (
             session.query(Position)
             .filter(Position.campaign_id == campaign_id, Position.status == "open")
             .count()
         )
 
-    raw_margin = next_layer_margin(layers_used, multiplier=campaign_multiplier)
+    raw_margin = next_layer_margin(layers_used, multiplier=campaign_multiplier, persona=campaign_persona)
     if raw_margin is None:
-        logger.info("Campaign #%s: all DCA layers exhausted", campaign_id)
+        logger.info("Campaign #%s: all DCA layers exhausted (%s schedule)", campaign_id, campaign_persona)
         return None
 
     # Equity safety net — refuse if this layer would push us over 80%
-    acc = recompute_account_state()
+    acc = recompute_account_state(persona=campaign_persona)
     equity = acc.get("equity") or 0
     already_locked = acc.get("margin_used") or 0
     margin = apply_equity_cap(raw_margin, equity, already_locked)
