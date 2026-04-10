@@ -33,11 +33,17 @@ export interface SignalOverlay {
   action: string;
 }
 
+export interface LiveTick {
+  price: number;
+  timestamp?: number; // unix seconds
+}
+
 interface PriceChartProps {
   bars: OHLCVBar[];
   timeframe?: string;
   positions?: PositionOverlay[];
   signals?: SignalOverlay[];
+  liveTick?: LiveTick | null;
 }
 
 /**
@@ -49,6 +55,7 @@ const PriceChart: React.FC<PriceChartProps> = ({
   timeframe = "1H",
   positions = [],
   signals = [],
+  liveTick = null,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -121,6 +128,28 @@ const PriceChart: React.FC<PriceChartProps> = ({
     seriesRef.current.setData(chartData);
     chartRef.current?.timeScale().fitContent();
   }, [bars]);
+
+  // Live tick merge — patch the last candle's close/high/low at tick speed
+  // so the chart "breathes" between slow DB polls. This is what TradingView
+  // and real trading platforms do — the last candle updates in real-time
+  // while historical bars come from the slower data source.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !liveTick || bars.length === 0) return;
+
+    const lastBar = bars[bars.length - 1];
+    const price = liveTick.price;
+
+    // Update the last candle: adjust close, and expand high/low if the
+    // tick exceeds them. The `time` stays the same (same candle period).
+    series.update({
+      time: lastBar.time as unknown as CandlestickData["time"],
+      open: lastBar.open,
+      high: Math.max(lastBar.high, price),
+      low: Math.min(lastBar.low, price),
+      close: price,
+    });
+  }, [liveTick, bars]);
 
   // Update position price lines whenever positions change
   useEffect(() => {

@@ -9,10 +9,16 @@
  */
 
 import React from "react";
+import useApi from "../../hooks/useApi";
 import SynthesisPanel from "../SynthesisPanel";
 import ScalpBrainPanel from "../ScalpBrainPanel";
 import ScalpingRangePanel from "../ScalpingRangePanel";
-import PriceChart, { OHLCVBar, PositionOverlay, SignalOverlay } from "../PriceChart";
+import PriceChart, { OHLCVBar, PositionOverlay, SignalOverlay, LiveTick } from "../PriceChart";
+
+interface TickerData {
+  price: number | null;
+  last_quote_at: number | null;
+}
 
 interface Props {
   timeframe: string;
@@ -33,8 +39,21 @@ const TradeNowTab: React.FC<Props> = ({
   positionOverlays,
   signalOverlays,
 }) => {
+  // Live ticker — polls Twelve Data /quote every 3s via the backend cache.
+  // The price is merged into the last candle of the chart so it "breathes"
+  // between the slower DB-backed OHLCV polls (which only update once per
+  // minute when the data-collector runs). This is how TradingView does it.
+  const { data: ticker } = useApi<TickerData>("/api/ticker", {
+    pollInterval: 3_000,
+  });
+
+  const liveTick: LiveTick | null =
+    ticker?.price != null
+      ? { price: ticker.price, timestamp: ticker.last_quote_at ?? undefined }
+      : null;
+
   const refreshHint =
-    timeframe === "1min" ? "3s"
+    timeframe === "1min" ? "live"
     : timeframe === "5min" ? "10s"
     : timeframe === "15min" ? "30s"
     : "1-5min";
@@ -74,6 +93,7 @@ const TradeNowTab: React.FC<Props> = ({
             timeframe={timeframe}
             positions={positionOverlays}
             signals={signalOverlays}
+            liveTick={liveTick}
           />
         )}
       </section>
