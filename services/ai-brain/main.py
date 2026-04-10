@@ -198,6 +198,17 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
         allowed, reason = should_allow_entry(new_side)
         if not allowed:
             logger.warning("Range bias BLOCKED %s entry: %s", new_side, reason)
+            try:
+                publish(STREAM_POSITION, {
+                    "type": "heartbeat_action",
+                    "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                    "campaign_id": 0,
+                    "action": "blocked",
+                    "side": new_side,
+                    "reason": f"Entry BLOCKED by range bias: {reason}",
+                })
+            except Exception:
+                pass
             return
         logger.info("Range bias OK for %s: %s", new_side, reason)
     except Exception:
@@ -214,17 +225,26 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
             _latest = _sess.query(_AS).order_by(_AS.timestamp.desc()).first()
             if _latest and _latest.technical_score is not None:
                 tech = float(_latest.technical_score)
+                blocked = False
                 if new_side == "BUY" and tech < MIN_TECH_SCORE_FOR_ENTRY:
-                    logger.warning(
-                        "Tech score BLOCKED BUY entry: technical=%.1f < %.1f minimum",
-                        tech, MIN_TECH_SCORE_FOR_ENTRY,
-                    )
-                    return
-                if new_side == "SELL" and tech > -MIN_TECH_SCORE_FOR_ENTRY:
-                    logger.warning(
-                        "Tech score BLOCKED SELL entry: technical=%.1f > %.1f minimum",
-                        tech, -MIN_TECH_SCORE_FOR_ENTRY,
-                    )
+                    blocked = True
+                    block_reason = f"Tech score BLOCKED BUY: technical={tech:.1f} < {MIN_TECH_SCORE_FOR_ENTRY} minimum"
+                elif new_side == "SELL" and tech > -MIN_TECH_SCORE_FOR_ENTRY:
+                    blocked = True
+                    block_reason = f"Tech score BLOCKED SELL: technical={tech:.1f} > {-MIN_TECH_SCORE_FOR_ENTRY} minimum"
+                if blocked:
+                    logger.warning(block_reason)
+                    try:
+                        publish(STREAM_POSITION, {
+                            "type": "heartbeat_action",
+                            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                            "campaign_id": 0,
+                            "action": "blocked",
+                            "side": new_side,
+                            "reason": f"Entry BLOCKED: {block_reason}",
+                        })
+                    except Exception:
+                        pass
                     return
     except Exception:
         logger.exception("Tech score gate failed — allowing entry")
@@ -714,6 +734,29 @@ def main() -> None:
     threading.Thread(target=_theses_watcher, daemon=True, name="theses-watcher").start()
     threading.Thread(target=_theses_resolver, daemon=True, name="theses-resolver").start()
     logger.info("Theses watcher + resolver threads started")
+
+    # Daily P/L summary — fires at 22:00 UTC (5pm ET) with combined main+scalper stats
+    from daily_summary import run_daily_summary_loop as _daily_summary
+    threading.Thread(target=_daily_summary, daemon=True, name="daily-summary").start()
+    logger.info("Daily summary worker thread started")
+
+    # Scalper background poller — hits /api/scalp-brain every 30s so the
+    # scalper executor fires even when the dashboard tab is backgrounded
+    # or nobody is viewing it. Without this, the scalper goes blind when
+    # the visibility guard pauses frontend polling.
+    def _scalper_poller():
+        import requests as _req
+        _time.sleep(60)  # let dashboard boot
+        logger.info("Scalper poller started (30s cadence)")
+        while True:
+            try:
+                _req.get("http://dashboard:8000/api/scalp-brain", timeout=15)
+            except Exception:
+                pass  # dashboard might be restarting
+            _time.sleep(30)
+
+    threading.Thread(target=_scalper_poller, daemon=True, name="scalper-poller").start()
+    logger.info("Scalper poller thread started")
 
     for msg_id, data in subscribe(STREAM_IN, group=GROUP, consumer=CONSUMER, block=10_000):
         logger.info("Received scores event %s", msg_id)

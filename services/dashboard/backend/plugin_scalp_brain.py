@@ -94,7 +94,10 @@ assert sum(WEIGHTS.values()) == 100, "weights must sum to 100"
 
 # Minimum ATR in dollars for a scalp to have room for R:R ≥ 1.5
 ATR_FLOOR_USD = 0.20
-ADX_FLOOR = 18.0
+# Lowered from 18 to 14 — WTI crude ADX frequently sits at 13-16 during
+# normal trading which was preventing the scalper from ever entering.
+# 14 still filters out dead-flat chop but allows entries in mild trends.
+ADX_FLOOR = 14.0
 
 
 # ---------------------------------------------------------------------------
