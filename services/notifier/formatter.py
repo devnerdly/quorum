@@ -444,9 +444,12 @@ def _format_heartbeat_status(evt: dict) -> str:
     icon = "\U0001fac0"  # anatomical heart
     camp_id = evt.get("campaign_id")
     side = str(evt.get("side", "")).upper()
-    title = "Heartbeat status"
+    early_wake = evt.get("early_wake_reason")
+    title = "Heartbeat status" if not early_wake else "Heartbeat ALERT"
 
     lines = [f"{icon} *{_test_prefix(evt)}{title}*"]
+    if early_wake:
+        lines.append(f"⚡ _{early_wake}_")
     if camp_id is not None:
         lines.append(f"Campaign #{camp_id} — {side}")
     lines.append("")

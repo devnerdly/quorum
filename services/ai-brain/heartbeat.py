@@ -92,8 +92,14 @@ HASH_MAX_SKIP_SECONDS = 15 * 60
 # Status ping config — even when Opus is holding quietly, we want to
 # see the position state on Telegram regularly. Per-campaign cadence,
 # independent of whether Opus was called or the hash gate fired.
-# 10 min — user reported 20 min felt too rare for active monitoring.
-STATUS_PING_INTERVAL_SECONDS = 10 * 60  # 10 min between status pings per campaign
+STATUS_PING_INTERVAL_SECONDS = 5 * 60  # 5 min between status pings per campaign
+
+# Early-wake rules — conditions that force an IMMEDIATE status ping
+# regardless of the cooldown timer. These are "something just happened
+# that the user needs to see NOW" thresholds.
+EARLY_WAKE_PNL_CHANGE_PCT = 3.0     # P/L moved ≥ 3% since last ping
+EARLY_WAKE_PRICE_TO_SL_PCT = 1.0    # price within 1% of SL
+EARLY_WAKE_PRICE_TO_TP_PCT = 1.0    # price within 1% of TP
 REDIS_KEY_STATUS_PING_PREFIX = "heartbeat:status_ping:"  # + campaign_id
 
 # Guardrails
@@ -1141,7 +1147,11 @@ def _store_decision_hash(new_hash: str) -> None:
 
 def _status_ping_due(campaign_id: int) -> bool:
     """Return True if it's been >= STATUS_PING_INTERVAL_SECONDS since
-    the last status ping for this campaign (or if no prior ping exists)."""
+    the last status ping for this campaign (or if no prior ping exists).
+
+    Note: early-wake rules can override this — they're checked separately
+    in _should_early_wake() and bypass the timer entirely.
+    """
     try:
         r = get_redis()
         last_raw = _redis_str(r.get(f"{REDIS_KEY_STATUS_PING_PREFIX}{campaign_id}"))
@@ -1157,9 +1167,78 @@ def _status_ping_due(campaign_id: int) -> bool:
         return False  # fail-closed — don't spam on redis errors
 
 
-def _mark_status_ping(campaign_id: int) -> None:
+def _should_early_wake(camp_ctx: dict) -> tuple[bool, str]:
+    """Check if an immediate (early-wake) status ping should fire for
+    this campaign even though the normal timer hasn't elapsed yet.
+
+    Rules (any one triggers):
+      1. P/L moved ≥ EARLY_WAKE_PNL_CHANGE_PCT since the last ping
+      2. Price is within EARLY_WAKE_PRICE_TO_SL_PCT of the stop-loss
+      3. Price is within EARLY_WAKE_PRICE_TO_TP_PCT of the take-profit
+
+    Returns (should_wake, reason).
+    """
+    current_price = None
     try:
-        get_redis().set(f"{REDIS_KEY_STATUS_PING_PREFIX}{campaign_id}", str(time.time()))
+        current_price = get_current_price()
+    except Exception:
+        pass
+    if current_price is None:
+        return False, ""
+
+    # Rule 2: price close to SL
+    sl = camp_ctx.get("stop_loss")
+    if sl is not None:
+        try:
+            sl_f = float(sl)
+            if sl_f > 0:
+                dist_to_sl_pct = abs(current_price - sl_f) / current_price * 100
+                if dist_to_sl_pct <= EARLY_WAKE_PRICE_TO_SL_PCT:
+                    return True, f"price ${current_price:.3f} within {dist_to_sl_pct:.2f}% of SL ${sl_f:.3f}"
+        except (TypeError, ValueError):
+            pass
+
+    # Rule 3: price close to TP
+    tp = camp_ctx.get("take_profit")
+    if tp is not None:
+        try:
+            tp_f = float(tp)
+            if tp_f > 0:
+                dist_to_tp_pct = abs(current_price - tp_f) / current_price * 100
+                if dist_to_tp_pct <= EARLY_WAKE_PRICE_TO_TP_PCT:
+                    return True, f"price ${current_price:.3f} within {dist_to_tp_pct:.2f}% of TP ${tp_f:.3f}"
+        except (TypeError, ValueError):
+            pass
+
+    # Rule 1: P/L moved significantly since last ping
+    # We track the P/L at last ping in a Redis key per campaign
+    pnl_pct = camp_ctx.get("unrealized_pnl_pct")
+    if pnl_pct is not None:
+        try:
+            r = get_redis()
+            key = f"{REDIS_KEY_STATUS_PING_PREFIX}{camp_ctx.get('id')}:last_pnl_pct"
+            last_raw = _redis_str(r.get(key))
+            if last_raw is not None:
+                last_pnl_pct = float(last_raw)
+                delta = abs(float(pnl_pct) - last_pnl_pct)
+                if delta >= EARLY_WAKE_PNL_CHANGE_PCT:
+                    return True, f"P/L moved {delta:.1f}% since last ping (was {last_pnl_pct:+.1f}%, now {float(pnl_pct):+.1f}%)"
+        except Exception:
+            pass
+
+    return False, ""
+
+
+def _mark_status_ping(campaign_id: int, pnl_pct: float | None = None) -> None:
+    try:
+        r = get_redis()
+        r.set(f"{REDIS_KEY_STATUS_PING_PREFIX}{campaign_id}", str(time.time()))
+        # Store current P/L % so the early-wake rule can detect large moves
+        if pnl_pct is not None:
+            r.set(
+                f"{REDIS_KEY_STATUS_PING_PREFIX}{campaign_id}:last_pnl_pct",
+                str(float(pnl_pct)),
+            )
     except Exception:
         logger.exception("Failed to store status_ping ts for #%s", campaign_id)
 
@@ -1245,8 +1324,13 @@ def _fire_status_pings(
             continue
         if cid in campaigns_with_actions:
             continue  # action already fired its own alert
-        if not _status_ping_due(cid):
+
+        # Check early-wake rules first (bypass the timer)
+        early_wake, wake_reason = _should_early_wake(camp)
+        if not early_wake and not _status_ping_due(cid):
             continue
+        if early_wake:
+            logger.info("Heartbeat early-wake for #%s: %s", cid, wake_reason)
 
         reason = opus_reasons.get(cid)
         if not reason:
@@ -1265,10 +1349,15 @@ def _fire_status_pings(
                 logger.exception("Failed to read latest heartbeat_run for #%s", cid)
 
         payload = _build_status_ping_payload(camp, reason)
+        if early_wake and wake_reason:
+            payload["early_wake_reason"] = wake_reason
         try:
             publish(STREAM_POSITION, payload)
-            _mark_status_ping(cid)
-            logger.info("Fired heartbeat_status ping for campaign #%s", cid)
+            _mark_status_ping(cid, pnl_pct=camp.get("unrealized_pnl_pct"))
+            logger.info(
+                "Fired heartbeat_status ping for campaign #%s%s",
+                cid, f" [EARLY WAKE: {wake_reason}]" if early_wake else "",
+            )
         except Exception:
             logger.exception("Failed to publish heartbeat_status for #%s", cid)
 
