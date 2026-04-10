@@ -182,11 +182,17 @@ def _publish_position_event(kind: str, snap: dict) -> None:
 def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
     """Apply BUY/SELL signal logic against the current campaign state."""
 
-    # --- RANGE BIAS GATE ---
-    # Refuse to open LONG near the top of the 30-day range or SHORT near
-    # the bottom. This prevents the bot from buying at range highs and
-    # selling at range lows — which was the root cause of several losing
-    # trades (#7, #10, #11 all went LONG near range highs).
+    # --- GATE 0: MARKET HOURS ---
+    # WTI futures trade Sun 5pm–Fri 5pm CT (nearly 24/5 but closed weekends).
+    # Refuse to open new campaigns on Saturday or Sunday UTC when there's
+    # no real price discovery happening.
+    now_utc = datetime.now(tz=timezone.utc)
+    weekday = now_utc.weekday()  # 0=Mon ... 6=Sun
+    if weekday in (5, 6):  # Saturday or Sunday
+        logger.info("Market hours BLOCKED %s entry: weekend (day=%d)", new_side, weekday)
+        return
+
+    # --- GATE 1: RANGE BIAS ---
     try:
         from shared.range_bias import should_allow_entry
         allowed, reason = should_allow_entry(new_side)
@@ -196,6 +202,59 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
         logger.info("Range bias OK for %s: %s", new_side, reason)
     except Exception:
         logger.exception("Range bias check failed — allowing entry")
+
+    # --- GATE 2: TECHNICAL SCORE ALIGNMENT ---
+    # Never go LONG when technicals are bearish or SHORT when bullish.
+    # Root cause of losing campaigns #7 (tech=-4.5), #10 (tech=-1.7).
+    MIN_TECH_SCORE_FOR_ENTRY = 5.0
+    try:
+        from shared.models.base import SessionLocal as _SL
+        from shared.models.signals import AnalysisScore as _AS
+        with _SL() as _sess:
+            _latest = _sess.query(_AS).order_by(_AS.timestamp.desc()).first()
+            if _latest and _latest.technical_score is not None:
+                tech = float(_latest.technical_score)
+                if new_side == "BUY" and tech < MIN_TECH_SCORE_FOR_ENTRY:
+                    logger.warning(
+                        "Tech score BLOCKED BUY entry: technical=%.1f < %.1f minimum",
+                        tech, MIN_TECH_SCORE_FOR_ENTRY,
+                    )
+                    return
+                if new_side == "SELL" and tech > -MIN_TECH_SCORE_FOR_ENTRY:
+                    logger.warning(
+                        "Tech score BLOCKED SELL entry: technical=%.1f > %.1f minimum",
+                        tech, -MIN_TECH_SCORE_FOR_ENTRY,
+                    )
+                    return
+    except Exception:
+        logger.exception("Tech score gate failed — allowing entry")
+
+    # --- GATE 3: COOLDOWN AFTER LOSING TRADE ---
+    # Don't immediately re-enter after getting stopped out. Wait 30 min.
+    LOSS_COOLDOWN_MINUTES = 30
+    try:
+        from shared.models.campaigns import Campaign as _Camp
+        with _SL() as _sess:
+            last_closed = (
+                _sess.query(_Camp)
+                .filter(
+                    _Camp.persona == "main",
+                    _Camp.status != "open",
+                    _Camp.realized_pnl < 0,
+                )
+                .order_by(_Camp.closed_at.desc())
+                .first()
+            )
+            if last_closed and last_closed.closed_at:
+                age_min = (datetime.now(tz=timezone.utc) - last_closed.closed_at).total_seconds() / 60
+                if age_min < LOSS_COOLDOWN_MINUTES:
+                    logger.warning(
+                        "Loss cooldown BLOCKED %s entry: last losing campaign #%s closed %.0f min ago (need %d min)",
+                        new_side, last_closed.id, age_min, LOSS_COOLDOWN_MINUTES,
+                    )
+                    return
+    except Exception:
+        logger.exception("Loss cooldown check failed — allowing entry")
 
     account = recompute_account_state()
     free_margin = account.get("free_margin") or 0.0

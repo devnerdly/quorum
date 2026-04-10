@@ -36,8 +36,15 @@ logger = logging.getLogger(__name__)
 PRICE_SOURCE: str = "twelve"  # single canonical price source (Twelve Data WTI/USD)
 
 
+MAX_PRICE_STALENESS_SECONDS = 5 * 60  # refuse to trade on data older than 5 min
+
+
 def get_current_price() -> float | None:
-    """Return the most recent 1-min WTI close from Twelve Data."""
+    """Return the most recent 1-min WTI close from Twelve Data.
+
+    Returns None if the latest bar is older than MAX_PRICE_STALENESS_SECONDS
+    — this prevents the bot from trading on stale data if the collector dies.
+    """
     with SessionLocal() as session:
         row = (
             session.query(OHLCV)
@@ -45,7 +52,16 @@ def get_current_price() -> float | None:
             .order_by(OHLCV.timestamp.desc())
             .first()
         )
-        return float(row.close) if row else None
+        if row is None:
+            return None
+        age = (datetime.now(tz=timezone.utc) - row.timestamp).total_seconds()
+        if age > MAX_PRICE_STALENESS_SECONDS:
+            logger.warning(
+                "STALE PRICE: latest bar is %.0fs old (limit %ds) — refusing to return price",
+                age, MAX_PRICE_STALENESS_SECONDS,
+            )
+            return None
+        return float(row.close)
 
 
 def get_current_bar() -> tuple[float, float, float] | None:

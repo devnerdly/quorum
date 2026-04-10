@@ -236,6 +236,21 @@ def compute_size_multiplier(
     except Exception:
         pass  # session check is best-effort, never block sizing
 
+    # ---------- CONFIDENCE CAP ----------
+    # The multiplier can never exceed 2× the LLM confidence. This prevents
+    # the bot from putting its biggest bet on its weakest signal — e.g.
+    # conf=0.55 caps at 1.1x, conf=0.80 caps at 1.6x. Campaign #10 had
+    # 1.65x on a 0.62 confidence signal; this rule would have capped it
+    # to 1.24x, cutting the loss by ~25%.
+    if llm_conf is not None and llm_conf > 0:
+        conf_cap = llm_conf * 2.0
+        if multiplier > conf_cap:
+            reasons.append(
+                f"confidence cap: {multiplier:.2f}× → {conf_cap:.2f}× "
+                f"(max 2× conf {llm_conf:.2f})"
+            )
+            multiplier = conf_cap
+
     multiplier = clamp_multiplier(multiplier)
 
     info = {
