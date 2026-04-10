@@ -1014,6 +1014,21 @@ def get_liquidations(
 
 
 # ---------------------------------------------------------------------------
+# Range Bias — 30-day dynamic range position
+# ---------------------------------------------------------------------------
+
+@app.get("/api/range-bias")
+def get_range_bias_endpoint() -> dict[str, Any]:
+    """Where is price within the 30-day range? Returns directional bias."""
+    try:
+        from shared.range_bias import compute_range_bias
+        return {"data": compute_range_bias()}
+    except Exception as exc:
+        logger.exception("range-bias endpoint failed")
+        return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
 # Theses — forward-looking conditional plans
 # ---------------------------------------------------------------------------
 

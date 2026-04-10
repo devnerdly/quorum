@@ -279,7 +279,14 @@ RULES:
    tick, holding again is fine; but if you're changing your mind, cite
    what changed.
 
-8. PENDING THESES ARE IDEAS YOU ALREADY HAVE. The context contains a
+8. RANGE BIAS. The context contains `range_bias` — the 30-day rolling
+   range position. Check `position_pct` (0=bottom, 100=top) and `bias`.
+   A LONG campaign near the top of the range (>75%) should have a
+   TIGHTER SL — mean-reversion risk is high. A SHORT near the bottom
+   (<25%) same. Reference range levels in your reasoning when relevant
+   (e.g. "price at 82% of 30-day range, nearing resistance").
+
+9. PENDING THESES ARE IDEAS YOU ALREADY HAVE. The context contains a
    `pending_theses` list — forward-looking plans from the user (chat),
    previous heartbeat ticks (including your own earlier proposals),
    and the scalp brain. These are CONDITIONS THE BOT IS ALREADY
@@ -604,7 +611,20 @@ def _build_context(open_campaign_ids: list[int]) -> dict:
         # in this list (the propose_theses dedupe does the mechanical
         # check but Opus should self-filter first).
         "pending_theses": _get_pending_theses_for_context(),
+        # 30-day range position — tells Opus where price sits in the
+        # broader range so it can factor mean-reversion risk into its
+        # hold/close/update_levels decisions.
+        "range_bias": _get_range_bias(),
     }
+
+
+def _get_range_bias() -> dict | None:
+    try:
+        from shared.range_bias import compute_range_bias
+        return compute_range_bias()
+    except Exception:
+        logger.exception("Failed to compute range bias for heartbeat")
+        return None
 
 
 # ---------------------------------------------------------------------------

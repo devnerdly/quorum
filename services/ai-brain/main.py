@@ -181,6 +181,22 @@ def _publish_position_event(kind: str, snap: dict) -> None:
 
 def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
     """Apply BUY/SELL signal logic against the current campaign state."""
+
+    # --- RANGE BIAS GATE ---
+    # Refuse to open LONG near the top of the 30-day range or SHORT near
+    # the bottom. This prevents the bot from buying at range highs and
+    # selling at range lows — which was the root cause of several losing
+    # trades (#7, #10, #11 all went LONG near range highs).
+    try:
+        from shared.range_bias import should_allow_entry
+        allowed, reason = should_allow_entry(new_side)
+        if not allowed:
+            logger.warning("Range bias BLOCKED %s entry: %s", new_side, reason)
+            return
+        logger.info("Range bias OK for %s: %s", new_side, reason)
+    except Exception:
+        logger.exception("Range bias check failed — allowing entry")
+
     account = recompute_account_state()
     free_margin = account.get("free_margin") or 0.0
 
@@ -189,7 +205,7 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
         logger.warning("_handle_campaign_signal: no current price — skipping")
         return
 
-    open_camps = list_open_campaigns()
+    open_camps = list_open_campaigns(persona="main")
 
     if not open_camps:
         # No open campaign — open a new one if we have margin. The
