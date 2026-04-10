@@ -2,53 +2,142 @@
 
 > ⚠️ **Research tool, not financial advice.** Leveraged trading can lose you more than your deposit. Read [LICENSE](LICENSE) and [SECURITY.md](SECURITY.md) before running anything that touches real money.
 
-A self-hosted, AI-assisted analytics stack for discretionary WTI crude oil trading. Pulls real-time market data, positioning, microstructure, macro, news, sentiment, and user performance history into a single dashboard; layers a 6-agent adversarial committee on top for decision support; writes trades to an internal "paper book" that the user can mirror manually on a broker of their choice.
+A self-hosted, AI-assisted analytics stack for discretionary WTI crude oil trading. Pulls real-time market data from **Twelve Data** (WTI/USD), positioning, microstructure, macro, news, sentiment, and user performance history into a **6-tab dashboard**; layers a **13-agent adversarial committee** (Claude Sonnet + Grok 4.20 + Opus judge) on top for decision support; runs an **Opus heartbeat position manager** that actively manages open campaigns every 5 minutes; provides a **Scalp Brain** that stitches 11 intraday signals into a single LONG/SHORT/WAIT verdict; and maintains **forward-looking theses** that auto-trigger and track outcomes for learning.
 
-Built on Docker Compose microservices with Postgres + TimescaleDB + Redis Streams. Python backend, React frontend, Claude + Grok for LLM reasoning, Binance USD-M futures (`CLUSDT` TRADIFI perpetual) as the primary price feed.
+Built on Docker Compose microservices with Postgres + TimescaleDB + Redis Streams. Python backend, React frontend, Claude + Grok for LLM reasoning, Twelve Data WTI/USD as the canonical price feed.
 
 ---
 
 ## What the dashboard actually shows
 
-The frontend is a single-page React app with the following sections, top to bottom:
+The frontend is a **6-tab React app** with a persistent cockpit bar:
 
-**Header** — Live tick-by-tick price ticker via direct browser → Binance WebSocket. Colour-coded direction of last change, 24h range, tick counter.
+### Cockpit Bar (always visible)
 
-**Decision Support** — three synthesis widgets that turn the firehose of raw numbers into something a human can read in 5 seconds:
-- **Now Brief** — AI-generated structured brief (Claude Haiku, 45s cache) reading the entire dashboard state and emitting `{headline, market_state, your_position, next_action, watch_for, risk_level, risk_reason}`.
-- **Signal Confluence** — pure-logic matrix classifying every current signal as BULL / BEAR / NEUTRAL, with per-signal reason and a dominant-side balance bar.
-- **Anomaly Radar** — threshold-based detector for rare/extreme conditions (funding blowout, OI spike, liquidation cluster, retail-vs-smart divergence, range breaks, etc.) with severity 1–10 and a 24h history log.
+- **Live price ticker** — WTI/USD from Twelve Data (3-second poll)
+- **Heartbeat pill** 🫀 — Opus position manager status + countdown + click-to-pause
+- **Conviction one-liner** — composite 0–100 score with direction arrow
+- **Account one-liner** — equity + open P/L + drawdown %
+- **WebSocket status** — Live/Disconnected indicator
+- **Tab switcher** — 6 tabs with keyboard shortcuts `1`-`6`
 
-**Account State** — 7 cards covering equity, wallet balance, margin used, margin level %, free margin, realized PnL all-time, open campaigns count, and equity Δ / drawdown with a bar to the −50% hard stop.
+### 🎯 Tab 1: Trade Now (default)
 
-**Risk & Scenario Tools** — 4 widgets:
-- **Scenario Calculator** — table of PnL / equity / margin level / status at 11 price offsets (±5%) plus computed key levels: breakeven, stop-out price, −50% hard-stop price, and distance to each.
-- **Monte Carlo** — 2000-path GBM simulation over 24h using rolling 1h log-return σ from 7d history. Outputs P(margin call) and P(−50% hard stop) probabilities plus P5/P50/P95 equity percentiles.
-- **VWAP** — session (24h) and weekly (7d) VWAP with distance in %.
-- **Events Calendar** — EIA weekly reports, FOMC, OPEC MOMR, IEA reports for the next 14 days with live countdown.
+Zero-scroll scalp cockpit — the "should I fire right now" view:
 
-**Cross-Asset Context & Flow** — 2 widgets:
-- **Cross-Asset Correlations** — DXY, SPX, Gold, BTC, VIX with 1h/24h change and rolling 24h Pearson correlation vs CLUSDT. Shows when oil decouples from broader risk.
-- **Cumulative Volume Delta** — CVD computed from 1-min klines' taker buy volume; price/CVD divergence detection (bullish/bearish hidden flow).
+- **Now Brief** — AI-generated structured brief (Claude Haiku, 3-min cache) reading the entire dashboard state
+- **Signal Confluence** — pure-logic matrix classifying every signal as BULL / BEAR / NEUTRAL
+- **Anomaly Radar** — threshold-based detector for rare conditions with severity 1–10
+- **Scalp Brain** — one-panel ultimate scalper verdict stitching 11 signals (multi-TF RSI, VWAP ±2σ bands, session range, opening-range breakout, CVD, orderbook imbalance, whale bias, conviction trend, cross-asset stress, session regime, BBands squeeze) into a weighted verdict: **LONG NOW / SHORT NOW / LEAN LONG / LEAN SHORT / WAIT** with deterministic entry/SL/TP1/TP2/R:R from ATR. Four gatekeepers (ATR floor, ADX floor, HTF wall, heartbeat conflict) must pass for a NOW verdict. Fires Telegram alerts on state transitions.
+- **Scalping Range** — 5-min percentile range (2h lookback) + real-time 30-min high/low, VWAP bias, ATR regime classification, per-side entry/SL/TP setups with R:R
+- **Price Chart** — TradingView Lightweight Charts across 6 timeframes with position + signal overlays
 
-**Learning & Feedback Loop** — 3 widgets:
-- **Trade Journal** — automatically captures a full dashboard-state snapshot at every campaign open and close. Running stats: win rate, total PnL, profit factor, avg win / loss, Sharpe-like ratio, by-close-reason breakdown. Scrollable entry list.
-- **Historical Pattern Match** — weighted Euclidean similarity search over a background-captured feature vector (scores, funding, positioning, taker flow). Returns top-10 most similar past moments with their actual forward returns at 1h / 4h / 24h horizons and an aggregate win-rate distribution.
-- **Smart Alerts** — confluence-based alert builder. JSON expression tree with AND/OR over 18 metrics and six operators. Live match indicator. Fires to the existing Telegram notifier pipeline.
+### 📊 Tab 2: Positions
 
-**Conviction Meter** — composite 0..100 gauge combining unified score, technical, 60-min momentum, funding extreme (contrarian-signed), retail-vs-smart delta, alerts, breaking news. Shows BULL/BEAR/MIXED direction and top 5 drivers with individual contributions.
+- **Account Panel** — equity, cash, margin, free margin, drawdown with hard-stop bar
+- **Campaigns Panel** — open DCA campaigns with per-layer table, DCA preview, close/add-layer buttons
+- **Risk & Scenario Tools** — PnL at 11 price offsets, Monte Carlo margin-call probability, VWAP, economic calendar
 
-**Binance Derivatives Metrics** — 4 cards: funding rate gauge + 7d sparkline, open interest + 24h change, long/short ratios (top vs retail vs taker flow), liquidations 24h USD totals + live event feed.
+### 🌍 Tab 3: Market
 
-**Binance Pro (Market Microstructure)** — 3 cards: order book heatmap with bid/ask walls + imbalance %, whale trades feed (≥$10k aggregated), volume profile with POC + value area (70% volume range).
+- **Twelve Data Sensors** — market sessions (US/London/Asia timing + sizing multiplier), WTI indicators (RSI/MACD/ATR/ADX/BBANDS), cross-asset stress (SPY/BTC/UUP RSI)
+- **Cross-Asset Context** — DXY, SPX, Gold, BTC, VIX with correlations + CVD divergence
+- **Binance Metrics** — funding rate, open interest, long/short ratios, liquidations
+- **Binance Pro** — orderbook depth + imbalance, whale trades, volume profile with POC
+- **Marketfeed Panel** — @marketfeed knowledge summaries
 
-**Analysis Scores** — 5 full-width bipolar cards: Technical, Fundamental, Sentiment, Shipping, Unified. Each on a −100..+100 axis with 7-level sentiment band label.
+### 📌 Tab 4: Theses
 
-**Price Chart** — TradingView Lightweight Charts candlestick view of Binance CLUSDT across 1m / 5m / 15m / 1H / 1D / 1W with per-layer campaign markers (`C#<id> L<n> SHORT/LONG`) for entry/SL/TP lines.
+Forward-looking conditional plans with automatic trigger detection and outcome tracking, split into two independent sections:
 
-**Open Campaigns** — expandable DCA campaign cards with per-layer table, layer margin stop bar, and a **Next DCA Layer Preview** table — simulated outcomes (new avg, new total lots, new breakeven) at 5 trigger price levels.
+- **Campaign Theses** — created by user (chat or form), Opus heartbeat manager, or ai-brain. Plans tied to the main campaign system.
+- **Scalp Theses** — created automatically by the Scalp Brain when it enters LEAN states. The scalper's own learning corpus — never touches real campaigns, tracks its own hit rate independently.
 
-Plus: **Positions**, **Signal History**, **@marketfeed digest panel**, **Chat panel** with full LLM tool access, **Logs panel** streaming container stdout over WebSocket.
+Each section shows: stats strip (30d created count, hit rate, hypothetical P/L), triggered (decide now), pending, collapsible resolved history with outcome badges (✅ correct / ❌ wrong / 〰 partial / ❓ unresolved).
+
+Trigger types: price cross above/below, unified score above/below, time elapsed, news keyword match, scalp brain state transition, manual.
+
+### 🔍 Tab 5: Investigate
+
+- **Conviction Meter** — composite 0–100 gauge over 7 weighted inputs with driver breakdown
+- **Analysis Scores** — 5 bipolar cards (Technical, Fundamental, Sentiment, Shipping, Unified)
+- **Learning Panel** — trade journal, historical pattern match (weighted Euclidean similarity), signal performance tracker
+- **Signal History** — clickable rows opening the Signal Detail Drawer
+
+### ⚙️ Tab 6: System
+
+- **LLM Usage Panel** — live token + cost breakdown per call site, per model, per service. 24h hourly sparkline, cache savings, heartbeat skip ratio. Tracks every Anthropic/xAI call the bot makes.
+- **Logs Panel** — live Docker container stdout streaming
+
+---
+
+## Key features
+
+### 13-Agent Adversarial Committee
+
+Twelve specialist agents run in parallel, each building the strongest case for their side from their own domain:
+
+| Team | Model | Agents |
+|---|---|---|
+| **Claude Sonnet team** | `claude-sonnet-4-6` | 3 bull (geopolitics, technical, macro) + 3 bear |
+| **Grok 4.20 team** | `grok-4.20-0309-reasoning` | 3 bull (geopolitics, technical, macro) + 3 bear |
+| **Judge** | `claude-opus-4-6` | Reads all 12 cases + full context, renders verdict |
+
+The judge detects **cross-model agreement** (when Sonnet and Grok agree on the same domain = high conviction, disagree = red flag), computes per-model team averages, and handles same-domain neutralization. R:R is computed deterministically in Python from the judge's trade levels. ~60s end-to-end, ~$0.60/debate.
+
+### Opus Heartbeat Position Manager
+
+A background worker in `ai-brain` that reviews every open campaign with Claude Opus 4.6:
+
+- **5-minute normal cadence** — ticks and decides hold / close / update_levels per campaign
+- **30-second hot cadence** — activates for 5 minutes after any campaign open, close, TP/SL hit, or DCA layer add. Opus aggressively monitors the transition and can react within 30 seconds.
+- **Hash gate** — before calling Opus, builds a bucketed hash of the decision signal (price, P/L, scores, news). If nothing material changed AND the last decision is < 15 min old, skips the Opus call entirely. Saves ~50% of LLM spend on quiet markets.
+- **Safety rails** — Redis kill-switch (dashboard + env), 30-min close cooldown, 0.5% indecision guard, level validation. The -50% hard-stop runs independently on every score event.
+- **Telegram alerts** — every action (close, update_levels) + periodic status pings (~20 min per campaign with price, P/L, distance to TP/SL, Opus reason, margin/leverage/notional exposure)
+- **Thesis proposer** — Opus can propose up to 2 forward-looking theses per tick, deduped against existing pending theses
+
+### Scalp Brain
+
+One-panel ultimate scalper verdict stitching 11 signals into a single LONG NOW / SHORT NOW / LEAN / WAIT answer:
+
+- **11 weighted signals** (sum 100): multi-TF RSI (15), VWAP ±2σ bands (15), session range position (10), opening-range breakout (10), CVD flow (10), orderbook imbalance (10), whale bias (8), conviction trend (8), cross-asset stress (5), session regime (5), BBands squeeze (4)
+- **4 gatekeepers**: ATR floor, ADX floor, higher-timeframe RSI wall, heartbeat conflict
+- **Deterministic levels**: entry = current price, SL = ATR ×1.0 snapped to structural level, TP1 = ATR ×1.5, TP2 = ATR ×2.5
+- **Auto-propose**: on LEAN states, the scalp brain saves a scalp-domain thesis with full signal reasoning for later review (rate-limited to 1 per side per 15 min)
+- **Telegram alerts**: fires on verdict transitions into NOW states (5-min per-side cooldown)
+
+### Forward-Looking Theses
+
+Conditional trading plans that trigger on future market conditions and auto-track outcomes:
+
+- **Creation paths**: user via chat ("remember if price hits 95 I want to go long"), dashboard form, Opus heartbeat auto-propose, scalp brain auto-propose
+- **Trigger engine**: 30-second polling in ai-brain; triggers on price cross, score threshold, time elapsed, news keyword, scalp brain state transition, or manual
+- **Outcome tracking**: after trigger, monitors whether hypothetical TP or SL would have been hit first. Records MFE/MAE and hypothetical P/L. Auto-resolves when TP/SL hit or resolution window (default 4h) elapsed.
+- **Domain separation**: campaign theses (user + Opus) and scalp theses (scalp brain only) roll up independently. Each has its own hit rate + hypothetical P/L stats.
+- **Telegram**: only `thesis_triggered` alerts reach the feed; created/resolved are silent (visible in dashboard)
+- **Heartbeat integration**: pending theses are injected into the heartbeat Opus context so it can reference them in its decisions
+
+### LLM Token Optimization
+
+- **Heartbeat hash gate**: skips Opus when nothing material changed (~50% savings)
+- **Prompt caching**: `cache_control: ephemeral` on committee judge + specialists + chat system prompts (10% input cost on cache hits)
+- **Visibility guard**: all polling stops when the browser tab is backgrounded (zero LLM calls when you're not looking)
+- **Now Brief TTL**: 3-minute cache (up from 45s), poll aligned to 90s
+- **Marketfeed skip**: < 3 headlines → placeholder digest, no Haiku call
+- **Chat model**: Sonnet by default (was Opus, 5x cheaper)
+- **LLM usage tracker**: per-call audit log with pricing table, aggregated in dashboard System tab
+
+### Telegram Bot
+
+- Every AI recommendation formatted as Markdown
+- Heartbeat status pings (~20 min per campaign) with full sizing info (margin × leverage = notional exposure)
+- Heartbeat action alerts (close / update_levels) with Opus reasoning
+- Scalp brain NOW verdict transitions with entry/SL/TP/R:R
+- Thesis triggered alerts with plan + "decide now" prompt
+- `/state`, `/positions` shortcuts
+- Free-text chat forwarded to `/api/chat` with SSE progress streaming
+- **Read-only observers**: additional chat_ids receive all notifications but cannot interact (no commands, no chat)
+- **Telegram-specific formatting**: no tables/headers/horizontal rules (breaks on mobile), single-asterisk bold, emoji section markers, blockquotes for verdicts only
 
 ---
 
@@ -57,33 +146,35 @@ Plus: **Positions**, **Signal History**, **@marketfeed digest panel**, **Chat pa
 ```
 ┌──────────────┐  PriceEvents   ┌──────────┐  ScoresEvents  ┌──────────┐
 │ data-collector│──────────────▶│ analyzer │──────────────▶│ ai-brain │
-│ (Binance WS,  │  liquidations │ (scoring │                │ (Opus +  │
-│  cross-asset, │  funding, OI, │  engine) │                │ committee│
-│  macro)       │  L/S ratios   └────┬─────┘                │  Haiku,  │
-└──────┬────────┘                    │                      │  Grok)   │
-       │                             │                      └────┬─────┘
+│ (Twelve Data, │  liquidations │ (scoring │                │ (Opus +  │
+│  Binance WS,  │  funding, OI, │  engine) │                │ committee│
+│  cross-asset, │  L/S ratios   └────┬─────┘                │  Haiku,  │
+│  macro)       │                    │                      │  Grok +  │
+└──────┬────────┘                    │                      │ heartbeat│
+       │                             │                      │ +theses) │
        ▼  Redis Streams ─────────────┴───────────────────────────┤
    ┌───┴────────────────────────────────────────────────────┐    │
    │  postgres + timescaledb                                │    │
    │  ohlcv, scores, signals, campaigns, positions,         │    │
-   │  binance_metrics, signal_snapshots, anomalies, …       │    │
+   │  binance_metrics, heartbeat_runs, llm_usage, theses,   │    │
+   │  signal_snapshots, anomalies, …                        │    │
    └───▲────────────────────────────────────────────────────┘    │
        │                                                          │
    ┌───┴──────────┐           ┌─────────┐         ┌──────────┐   │
    │  sentiment   │           │ notifier│◀───────▶│ Telegram │   │
-   │  (RSS,       │           │ (bot +  │         └──────────┘   │
-   │   @marketfeed│           │ outbound)│                        │
-   │   Twitter)   │           └────▲────┘                         │
-   └──────┬───────┘                │                              │
+   │  (RSS,       │           │ (bot +  │         │ (main +  │   │
+   │   @marketfeed│           │ outbound│         │ observer)│   │
+   │   Twitter)   │           │ +fanout)│         └──────────┘   │
+   └──────┬───────┘           └────▲────┘                         │
           │                        │                              │
           ▼                        │                              │
    ┌──────┴────────────────────────┴──────┐                       │
    │            dashboard                 │◀─────────────────────┘
    │  FastAPI backend + plugin system     │
-   │  (40 REST routes, 2 WS, 18 plugins)  │
+   │  (50+ REST routes, 2 WS, 22 plugins) │
    │                  +                   │
    │  React frontend (Vite, Tailwind,     │
-   │  Lightweight Charts, 30+ components) │
+   │  6-tab layout, 40+ components)       │
    └──────────────────────────────────────┘
 ```
 
@@ -91,212 +182,38 @@ Plus: **Positions**, **Signal History**, **@marketfeed digest panel**, **Chat pa
 
 | Service | Responsibility |
 |---|---|
-| **data-collector** | Pulls Binance klines (REST + WebSocket), liquidations stream, derivatives metrics (funding, OI, L/S ratios, taker flow), cross-asset bars (Yahoo: DXY/SPX/Gold/BTC/VIX), and macro series (EIA, FRED, COT, JODI). Writes OHLCV + metrics tables. Publishes `PriceEvent` to Redis. |
-| **analyzer** | Subscribes to `PriceEvent`. Computes multi-timeframe technical score (RSI/MACD/MA/ADX), fundamental score (rolling z-scores of inventories/COT/JODI), sentiment score (news + Twitter + @marketfeed knowledge), shipping score, unified composite. Publishes `ScoresEvent`. Also runs the alerts evaluator loop (price alerts, keyword alerts, score crosses, confluence smart alerts). |
-| **ai-brain** | Opus strategist: reads the full state, emits structured `AIRecommendation` with entry/SL/TP. Haiku: per-minute @marketfeed digest classification + scoring. Grok: Twitter/X sentiment agent. Live watch worker: edits a single Telegram message in place with real-time price/score/verdict updates. Breaking-news watcher: triggers immediate reassessment on @marketfeed shocks. |
-| **sentiment** | RSS news scraper (multi-source), Grok-powered Twitter narrative fetcher, @marketfeed Telegram channel scraper + Haiku classifier + 5-min digest builder. Writes sentiment + knowledge tables. |
-| **dashboard** | FastAPI backend exposing ~40 REST routes and 2 WebSocket endpoints. Plugin architecture for LLM tools: each `plugin_*.py` file registers `PLUGIN_TOOLS` + `execute()` and is auto-loaded by the chat service. React/Vite/Tailwind frontend with 30+ components. Embedded chat with full tool access. |
-| **notifier** | Telegram outbound: formats `alert.triggered`, `position.event`, `signal.recommendation`, `knowledge.summary`, `live_watch.update` Redis streams into Markdown messages. Inbound: long-polls Telegram for user messages, forwards to `/api/chat`, streams SSE progress back into a single edited message (with tool-call indicators). |
-| **postgres** | TimescaleDB extension. Hypertables for all time-series data. Compression policies for chunks older than 30 days. |
-| **redis** | Consumer-group-based streaming bus for inter-service events. |
-| **docker-proxy** | `tecnativa/docker-socket-proxy` in read-only mode; lets the dashboard query container status + stream logs without exposing the full Docker socket. |
-
----
-
-## Features & tools catalogue
-
-### Price & market data (Binance CLUSDT)
-
-- Klines REST + WebSocket upserts for 1m / 5m / 15m / 1h / 4h / 1d / 1w
-- Live `@aggTrade` stream for the header ticker (direct browser → Binance, no proxy)
-- Orderbook snapshot with imbalance computation
-- `@forceOrder` (liquidations) WebSocket with event persistence
-- Funding rate history, open interest history, long/short ratios (top traders, global retail, taker buy/sell)
-- Cumulative Volume Delta computed from 1m kline `takerBuyBaseAssetVolume`
-- Volume profile (POC + value area) computed from 5m klines
-- Cross-asset context: DXY (DX-Y.NYB), SPX (^SPX), Gold (GC=F), BTC (BTC-USD), VIX (^VIX) with rolling correlation
-
-### Macro data
-
-- **EIA Open Data** — weekly crude/gasoline/distillate inventories
-- **FRED** — DXY, Fed Funds Rate, CPI, 10Y–2Y spread, …
-- **CFTC COT** — managed money and producer positioning
-- **JODI Oil World** — global supply/demand
-
-### Sentiment & news
-
-- RSS multi-source scraper (oilprice.com, Reuters energy, …)
-- **Grok** agent for real-time Twitter/X narrative summarisation
-- **@marketfeed** Telegram channel scraper with **Claude Haiku** classification + 5-minute digest builder
-- Breaking-news watcher triggers immediate AI reassessment
-
-### AI reasoning
-
-- **Opus strategist** — emits structured recommendation via Anthropic tools API, supports manage-existing-position decisions
-- **6-agent Committee** — adversarial debate with three bull specialists (geopolitics, technical, macro), three bear specialists, and an Opus judge. Agents receive a **full 22-source dashboard context** (scores, conviction, anomalies, all Binance metrics, orderbook, whales, CVD, cross-assets, Monte Carlo, trade journal, pattern match, smart alerts, volume profile). Judge computes deterministic R:R from returned trade levels, flags same-domain neutralization, handles failed agents.
-- **Claude Haiku Now Brief** — 45-second-cached synthesis brief reading the entire dashboard and emitting structured JSON.
-- **Anomaly Radar** — pure-logic detector for rare conditions with severity 1–10 and history log.
-- **Conviction Meter** — composite 0–100 gauge over 7 weighted inputs.
-- **Historical Pattern Matching** — weighted Euclidean distance in feature space over accumulated signal snapshots, returns forward-return distribution of the closest N moments.
-- **Signal Performance Tracker** — per-feature bucket stats showing whether signals actually predict forward returns.
+| **data-collector** | Pulls Twelve Data WTI/USD klines (1m/5m primary), Binance CLUSDT derivatives metrics (funding, OI, L/S ratios, liquidations, aggTrades), cross-asset bars, and macro series (EIA, FRED, COT, JODI). |
+| **analyzer** | Computes multi-timeframe technical score, fundamental score, sentiment score, shipping score, unified composite. Publishes `ScoresEvent`. Runs the alerts evaluator loop. |
+| **ai-brain** | Opus strategist + Haiku summary + Grok Twitter narrative. **Heartbeat position manager** (5-min tick + 30s hot window). **Theses watcher** (30s trigger scanner) + **theses resolver** (5-min outcome tracker). Live watch worker. Breaking-news watcher. |
+| **sentiment** | RSS news scraper, Grok Twitter narrative, @marketfeed Telegram scraper + Haiku 5-min digest builder (skips <3 headlines). |
+| **dashboard** | FastAPI backend with 50+ REST routes, 2 WebSocket endpoints, 22 `plugin_*.py` files. React/Vite/Tailwind frontend with 6-tab layout, 40+ components. Embedded chat. Scalp Brain engine. |
+| **notifier** | Telegram outbound: fans out to main user + read-only observers. Inbound: long-polls Telegram, forwards to `/api/chat`, streams SSE progress. Formats 12 event types (signals, positions, heartbeat status/actions, scalp brain, thesis triggered, marketfeed digests, live watch, alerts, system). |
+| **postgres** | TimescaleDB extension. 20+ tables including `heartbeat_runs`, `llm_usage`, `theses`. |
+| **redis** | Consumer-group streaming bus + heartbeat state keys (enabled, hot_until, context hash, status ping timers). |
 
 ### LLM models used
 
 | Model | Where | What it does |
 |---|---|---|
-| **Claude Opus 4.6** (`claude-opus-4-6`) | chat backend, committee judge, AI brain strategist | Primary reasoning agent with full tool access; emits trading recommendations via Anthropic tools API |
-| **Claude Sonnet 4.6** (`claude-sonnet-4-6`) | committee specialists | Six parallel agents (3 bull + 3 bear) running adversarial debates on full 22-source context |
-| **Claude Haiku 4.5** (`claude-haiku-4-5`) | @marketfeed classifier, AI brain summary, Now Brief | High-volume cheap classification: Telegram digest categorisation, 45s-cached synthesis brief |
-| **Grok 3** (`grok-3`, via x.ai OpenAI-compatible endpoint) | ai-brain Twitter agent | Real-time Twitter/X narrative summariser with built-in web access |
+| **Claude Opus 4.6** (`claude-opus-4-6`) | committee judge, heartbeat position manager, AI brain strategist | Primary reasoning: manages open positions (hold/close/update_levels), proposes theses, judges adversarial debates |
+| **Claude Sonnet 4.6** (`claude-sonnet-4-6`) | chat backend, committee specialists (6 agents) | Dashboard chat with full tool access; adversarial debate specialists (geopolitics/technical/macro × bull/bear) |
+| **Claude Haiku 4.5** (`claude-haiku-4-5`) | @marketfeed classifier, AI brain summary, Now Brief | High-volume cheap classification: 5-min digests, score summaries, 3-min-cached synthesis brief |
+| **Grok 4.20** (`grok-4.20-0309-reasoning`, via x.ai OpenAI-compatible endpoint) | committee specialists (6 agents), Twitter narrative | Live Twitter/X access + web search; 6 adversarial debate specialists with different training bias from Claude |
 
----
+### Cost
 
-## LLM tools catalogue
+Typical daily LLM spend with active trading (12h, 1-2 open campaigns):
 
-The chat/committee/brain agents talk to the database and external APIs through a plugin system. Each `plugin_*.py` file in `services/dashboard/backend/` registers a `PLUGIN_TOOLS` list and an `execute()` dispatcher; all tools are auto-merged into the single `TOOLS` array passed to Claude on every turn.
+| Call site | Real cost/call | Est. daily |
+|---|---|---|
+| Heartbeat Opus (5 min + hot) | ~$0.08 | $10-15 |
+| Recommendation Opus (per score event) | ~$0.14 | $7-10 |
+| Now Brief Haiku (3-min cache) | ~$0.006 | $1-2 |
+| Committee (12 agents + judge, manual) | ~$0.60 | $1-2 |
+| Everything else (chat, Haiku, Grok) | varies | $2-5 |
+| **Total** | | **~$20-30/day** |
 
-Below is every tool the LLM can invoke, grouped by category. **Write tools** (that mutate state, send messages, or place simulated orders) are marked ⚠️.
-
-### Market state & price data
-
-| Tool | Description |
-|---|---|
-| `get_current_market_state` | Snapshot: latest CLUSDT price, all 5 sub-scores, top 3 knowledge digests, open positions, latest AI recommendation. First call before any "should I…" question. |
-| `get_price_history` | OHLCV bars for a given timeframe (1m/5m/15m/1h/1d/1w) with optional limit. |
-| `get_vwap` | Volume-weighted average price for a timeframe and lookback window (typically 1H / 24h). |
-| `get_support_resistance` | Key S/R levels derived from 1H swing-high/low analysis. |
-| `get_pivot_points` | Classic daily pivot P/R1/R2/S1/S2 plus current price position relative to them. |
-| `get_correlation` | Rolling Pearson correlation between CLUSDT and another instrument over a window. |
-
-### Account, campaigns & positions
-
-| Tool | Description |
-|---|---|
-| `get_account_state` | Full account row: equity, cash, margin, free margin, drawdown, hard stop distance. |
-| `get_open_positions` | List of every open position with live PnL and margin. |
-| `get_campaigns` | Campaigns filtered by status (open / closed_*) with per-layer totals. |
-| `get_campaign_detail` | Full state for one campaign: avg entry, layers used, DCA preview table, max loss bar. |
-| `get_campaign_pnl_history` | Time series of equity PnL for a closed or still-open campaign. |
-| `get_performance_summary` | Aggregate journal stats: win rate, profit factor, avg win/loss, Sharpe-like. |
-| `review_closed_campaign` | LLM-readable post-mortem summary of a closed campaign with entry/exit snapshots. |
-| ⚠️ `open_new_campaign` | Opens a new LONG or SHORT campaign with the first DCA layer. One-at-a-time enforced. |
-| ⚠️ `add_dca_layer` | Scales into an existing campaign with the next layer from the DCA schedule. |
-| ⚠️ `close_campaign` | Closes all open layers in a campaign at current market. |
-| ⚠️ `partial_close_campaign` | Closes a % of open layers, oldest-first. |
-| ⚠️ `update_campaign_limits` | Updates `max_loss_pct` on a live campaign. |
-| ⚠️ `update_campaign_tp` | Sets/clears the campaign-level take-profit price. |
-| ⚠️ `add_campaign_note` | Appends free-form text to a campaign's notes field. |
-
-### Signals, scoring & recommendations
-
-| Tool | Description |
-|---|---|
-| `get_recent_signals` | Last N `AIRecommendation` rows from the analyzer/strategist pipeline. |
-| `get_signal_detail` | Full JSON payload for one signal: all sub-scores, reasoning text, entry/SL/TP. |
-| `compute_optimal_sl_tp` | Given an entry and side, compute ATR-based stop-loss and take-profit levels. |
-
-### Risk & scenario tools
-
-| Tool | Description |
-|---|---|
-| `simulate_trade` | What-if calculator: given side/entry/lots/SL/TP, reports resulting PnL at target levels, nominal exposure, and free margin consumed. |
-| `stress_test_campaign` | Runs current campaigns through 5 adverse price-move scenarios (−1% / −3% / −5% / −10% / custom) and reports margin level, hard-stop distance, and survival. |
-
-### Knowledge, news & sentiment
-
-| Tool | Description |
-|---|---|
-| `query_marketfeed` | Recent @marketfeed 5-minute digests with headline, key events, sentiment score/label. |
-
-### Analytics & system health
-
-| Tool | Description |
-|---|---|
-| `get_upcoming_events` | 7-day economic calendar: EIA weekly, FOMC, OPEC MOMR, IEA reports with importance and countdown. |
-| `get_system_health` | Per-source staleness map: OHLCV freshness, macro freshness, sentiment freshness. |
-| `get_data_sources_status` | Extended health with cadence metadata: expected interval, stale-after seconds, next fetch time. |
-| `get_llm_cost_today` | Running Anthropic/xAI token usage + estimated USD spend for the current day. |
-
-### Alerts
-
-| Tool | Description |
-|---|---|
-| `list_active_alerts` | All user-configured alerts currently in `active` state. |
-| ⚠️ `set_price_alert` | Create a price-crosses-threshold alert (above/below). |
-| ⚠️ `set_keyword_watch` | Create a keyword alert that fires when the keyword appears in a marketfeed digest or RSS headline. |
-| ⚠️ `set_score_alert` | Create a score-component alert (unified / technical / sentiment / shipping above/below/crosses a threshold). |
-| ⚠️ `cancel_alert` | Cancel an alert by id. |
-
-### Live monitoring
-
-| Tool | Description |
-|---|---|
-| `get_active_watch` | Returns the currently-active live-watch session (if any) with tick count and last verdict. |
-| ⚠️ `start_live_watch` | Starts a live monitoring session for N minutes; the bot posts a single Telegram message that updates itself every `cycle_seconds` with price / score delta / running verdict. |
-| ⚠️ `stop_live_watch` | Ends an active watch session early. |
-
-### Deep research
-
-| Tool | Description |
-|---|---|
-| `committee_debate` | Runs the full 6-agent adversarial committee (3 bulls + 3 bears + Opus judge). Takes 25–45s, costs ~$0.20. Returns per-agent cases, judge verdict, deterministic R:R, and win-condition flags. |
-| `deep_dive_entry_analysis` | Deep-research tool that combines technical + fundamental + sentiment + microstructure + scenario calculator output into a single structured recommendation for a hypothetical entry. |
-| `web_search` | DuckDuckGo search for oil/macro news (SSRF-guarded). |
-| `fetch_url` | Fetches and text-extracts a public URL with BeautifulSoup. Guarded by DNS-resolving allowlist that blocks loopback, private, link-local, cloud metadata, and multicast ranges. |
-
-### Memory (across conversations)
-
-| Tool | Description |
-|---|---|
-| ⚠️ `remember_fact` | Persists a free-form fact to the `facts` table with a category label; retrievable later. |
-| `recall_facts` | Returns stored facts, optionally filtered by category. Used by the bot to remember user preferences, prior decisions, standing rules. |
-
-### Plugin architecture
-
-Adding a new tool is a 3-step change:
-
-1. Create `services/dashboard/backend/plugin_<name>.py` with:
-   ```python
-   PLUGIN_TOOLS: list[dict] = [{
-       "name": "my_tool",
-       "description": "what it does",
-       "input_schema": {...JSON schema...},
-   }]
-
-   def execute(name: str, tool_input: dict) -> dict | None:
-       if name == "my_tool":
-           return _my_tool(**tool_input)
-       return None
-   ```
-2. Add `import plugin_<name>` to `services/dashboard/backend/chat.py` and append to `_PLUGINS`.
-3. Restart the dashboard — the tool is now available to every chat turn (dashboard + Telegram bot) and can be used by the committee specialists via their own context fetch.
-
-The same plugin files also expose helper functions that are called directly (not via LLM) by background workers, API endpoints, and the committee context builder.
-
-### Trading logic
-
-- **DCA campaigns** — layered margin `[3k, 6k, 10k, 20k, 30k, 30k]` USD on a $100k starting balance at x10 leverage (defaults in `shared/sizing.py`)
-- **Hard stop** — −50% account equity drawdown force-closes all campaigns
-- **Scenario calculator** — PnL/margin/status at 11 price offsets + key levels
-- **Monte Carlo** — GBM margin-call probability simulator
-- **Next DCA preview** — simulated outcomes if you add a layer at various offsets
-- **Trade journal** — auto-captured entry + exit snapshots
-- **Smart alerts** — confluence-based trigger trees
-
-### Dashboard UX
-
-- 30+ React components organised into logical rows
-- Chat panel with streaming tool-call visualisation
-- Logs panel streaming container stdout over WebSocket
-- Marketfeed panel with sentiment colouring
-- Signal detail drawer with full AI reasoning trace
-
-### Telegram bot
-
-- Every AI recommendation formatted as a Markdown alert
-- `/state`, `/positions` shortcuts
-- Free-text messages forwarded to `/api/chat` with SSE progress
-- Live watch sessions pin and update a single message per session
+Hash gate + prompt caching + visibility guard cut this by ~50% vs unoptimized.
 
 ---
 
@@ -306,16 +223,17 @@ The same plugin files also expose helper functions that are called directly (not
 
 - Docker + Docker Compose
 - An Anthropic API key (required)
-- Optional: xAI API key (Grok), Telegram bot token + chat ID, EIA / FRED keys
+- A Twelve Data API key (required for WTI price data — Grow plan $29/mo recommended)
+- Optional: xAI API key (Grok committee agents + Twitter narrative), Telegram bot token + chat ID, EIA / FRED keys
 
 ### Setup
 
 ```bash
-git clone https://github.com/devnerdly/WTI-Oil-Trading-Bot-Telegram-.git
-cd WTI-Oil-Trading-Bot-Telegram-
+git clone https://github.com/devnerdly/quorum.git
+cd quorum
 
 cp .env.example .env
-$EDITOR .env       # fill in ANTHROPIC_API_KEY at minimum
+$EDITOR .env       # fill in ANTHROPIC_API_KEY + TWELVE_API_KEY at minimum
 
 docker compose up -d --build
 ```
@@ -332,7 +250,8 @@ First startup takes a few minutes. Once healthy:
 docker compose ps                     # all services should be "healthy"
 curl -s localhost:8001/api/health | jq
 curl -s localhost:8001/api/account | jq
-curl -s 'localhost:8001/api/ohlcv?timeframe=5min&limit=5' | jq
+curl -s localhost:8001/api/scalp-brain | jq '.data.verdict'
+curl -s localhost:8001/api/heartbeat/status | jq '.data.enabled'
 ```
 
 ### Enabling authentication (REQUIRED if not localhost-only)
@@ -343,7 +262,18 @@ Set a long random value in `.env`:
 DASHBOARD_API_KEY=$(openssl rand -hex 32)
 ```
 
-Restart the dashboard container. All mutating endpoints, `/api/chat`, and `/api/logs` will now require the `X-API-Key: <value>` header. Read [SECURITY.md](SECURITY.md) for the full threat model and sensitive-endpoint list.
+Restart the dashboard container. All mutating endpoints, `/api/chat`, and `/api/logs` will now require the `X-API-Key: <value>` header.
+
+### Telegram setup
+
+```bash
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+TELEGRAM_CHAT_ID=<your-chat-id>
+
+# Optional: read-only observers (comma-separated, receive all notifications
+# but cannot interact with the bot)
+TELEGRAM_NOTIFY_CHAT_IDS=6167422315
+```
 
 ---
 
@@ -352,17 +282,12 @@ Restart the dashboard container. All mutating endpoints, `/api/chat`, and `/api/
 - **Python 3.12** — all backend services
 - **FastAPI + Uvicorn** — dashboard HTTP + WebSocket
 - **SQLAlchemy 2.x + psycopg v3** — DB layer
-- **PostgreSQL 16 + TimescaleDB** — hypertables, compression, continuous aggregates
-- **Redis 7** — streaming bus with consumer groups
-- **APScheduler** — job scheduling in data-collector
-- **websocket-client** — Binance WebSocket streams
-- **pandas + pandas-ta** — technical indicators
-- **numpy** — Monte Carlo simulation
-- **anthropic** — Claude SDK (Opus, Sonnet, Haiku)
-- **openai** — Grok (via x.ai OpenAI-compatible endpoint)
-- **python-telegram-bot** — bot framework
-- **BeautifulSoup4 + httpx** — web scraping (SSRF-guarded `fetch_url`)
-- **React 18 + Vite + TypeScript** — frontend
+- **PostgreSQL 16 + TimescaleDB** — hypertables, compression
+- **Redis 7** — streaming bus with consumer groups + state keys
+- **anthropic** — Claude SDK (Opus 4.6, Sonnet 4.6, Haiku 4.5)
+- **openai** — Grok 4.20 (via x.ai OpenAI-compatible endpoint)
+- **python-telegram-bot** — bot framework with observer fan-out
+- **React 18 + Vite + TypeScript** — 6-tab frontend
 - **Tailwind CSS** — styling
 - **TradingView Lightweight Charts** — candlestick chart
 
@@ -373,63 +298,60 @@ Restart the dashboard container. All mutating endpoints, `/api/chat`, and `/api/
 ```
 trading/
 ├── docker-compose.yml               # full stack orchestration
-├── LICENSE                          # MIT + trading disclaimer
-├── SECURITY.md                      # threat model, auth, sensitive endpoints
-├── .env.example                     # all env vars, non-secret
+├── LICENSE
+├── SECURITY.md
+├── .env.example
 ├── shared/                          # shared Python package
-│   ├── models/                      # SQLAlchemy models (18 tables)
+│   ├── models/                      # SQLAlchemy models (20+ tables)
 │   ├── schemas/                     # Pydantic events for Redis streams
 │   ├── config.py                    # settings via pydantic-settings
 │   ├── redis_streams.py             # publish/subscribe helpers
 │   ├── account_manager.py           # account state recompute
-│   ├── position_manager.py          # DCA campaign logic
-│   ├── sizing.py                    # DCA layer margins + lot sizing
+│   ├── position_manager.py          # DCA campaign logic + update_campaign_levels
+│   ├── sizing.py                    # DCA layer margins + dynamic sizing
+│   ├── dynamic_sizing.py            # compute_size_multiplier from market state
+│   ├── llm_usage.py                 # per-call token/cost tracker
+│   ├── theses.py                    # thesis CRUD + trigger eval + outcome resolution
+│   ├── heartbeat_hot.py             # arm hot-window from any service
 │   └── db_init.py                   # TimescaleDB hypertable setup
 ├── services/
-│   ├── data-collector/              # Binance + macro + cross-asset collectors
+│   ├── data-collector/              # Twelve Data + Binance + macro collectors
 │   ├── analyzer/                    # scoring engine + indicators
-│   ├── ai-brain/                    # Opus/Haiku/Grok agents
+│   ├── ai-brain/
+│   │   ├── main.py                  # event loop + worker threads
+│   │   ├── heartbeat.py             # Opus position manager (5min/30s hot)
+│   │   ├── theses_workers.py        # trigger watcher + outcome resolver
+│   │   └── agents/                  # opus.py, haiku.py, grok.py
 │   ├── sentiment/                   # RSS/Twitter/@marketfeed scrapers
-│   ├── notifier/                    # Telegram in/out
+│   ├── notifier/
+│   │   ├── main.py                  # Telegram in/out + observer fan-out
+│   │   ├── formatter.py             # 12 event type formatters
+│   │   └── chat_client.py           # SSE chat stream proxy
 │   └── dashboard/
-│       ├── backend/                 # FastAPI + 18 plugin_*.py files
-│       └── frontend/                # React + Vite + Tailwind
-└── tests/                           # pytest suites (per-service)
+│       ├── backend/                 # FastAPI + 22 plugin_*.py files
+│       │   ├── plugin_committee.py  # 13-agent adversarial debate
+│       │   ├── plugin_scalp_brain.py # 11-signal scalper verdict
+│       │   ├── plugin_heartbeat.py  # pause/resume + status
+│       │   ├── plugin_theses.py     # CRUD + domain stats
+│       │   ├── plugin_llm_usage.py  # cost rollups
+│       │   ├── plugin_now_brief.py  # AI synthesis brief
+│       │   ├── chat.py              # LLM chat with tools
+│       │   ├── chat_tools.py        # 30+ Anthropic tool schemas
+│       │   └── ...                  # 14 more plugins
+│       └── frontend/
+│           └── src/
+│               ├── App.tsx           # 6-tab layout + cockpit bar
+│               └── components/       # 40+ React components
+│                   ├── CockpitBar.tsx
+│                   ├── ScalpBrainPanel.tsx
+│                   ├── HeartbeatPill.tsx
+│                   ├── LlmUsagePanel.tsx
+│                   └── tabs/         # TradeNow, Positions, Market,
+│                                     # Theses, Investigate, System
+└── docs/
+    └── superpowers/
+        └── specs/                   # design documents
 ```
-
----
-
-## Extending
-
-### Add a new data source
-
-1. Drop a collector under `services/data-collector/collectors/<name>.py`
-2. Register a job in `services/data-collector/main.py`
-3. Expose via an endpoint in `services/dashboard/backend/main.py`
-4. Add a React card under `services/dashboard/frontend/src/components/`
-
-### Add a new LLM tool
-
-1. Create `services/dashboard/backend/plugin_<name>.py` with `PLUGIN_TOOLS: list[dict]` and `def execute(name, input) -> dict`
-2. Add the import to `_PLUGINS` in `chat.py`
-3. The tool is immediately available to the dashboard chat and Telegram bot
-
-### Add a new committee specialist
-
-Edit `plugin_committee.py`:
-1. Write a new system prompt constant
-2. Append to `_BULL_TEAM` or `_BEAR_TEAM`
-3. The judge schema auto-adjusts
-
----
-
-## Known limitations
-
-- **No database migrations.** Schema changes require `docker compose down -v` or manual `ALTER TABLE`. Alembic is on the roadmap.
-- **Dashboard API auth is opt-in.** `DASHBOARD_API_KEY` defaults to empty for local dev; you MUST set it outside localhost.
-- **Tests cover only parts of the stack.** Dashboard plugins and shared trading logic are thin on coverage.
-- **Not a trade executor.** The bot manages an **internal paper book**. Real order execution would require adding a broker adapter.
-- **Data cost.** Running the committee every 30 minutes costs about $0.20–$0.40/day in Anthropic API fees. Now Brief adds ~$0.10/day. Haiku @marketfeed classification is nearly free.
 
 ---
 
@@ -437,7 +359,7 @@ Edit `plugin_committee.py`:
 
 This is an **experimental research tool**. Running it against a live broker account is at your own risk. The authors accept no liability for any losses. Read the full disclaimer in [LICENSE](LICENSE).
 
-Leveraged derivatives (CFDs, futures, perpetuals) can lose you more than your deposit. The software does not predict price. Signals are hypotheses, not guarantees. Trade with money you can afford to lose.
+Leveraged derivatives (CFDs, futures, perpetuals) can lose you more than your deposit. The software does not predict price. Signals are hypotheses, not guarantees.
 
 ## License
 
