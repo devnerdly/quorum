@@ -92,7 +92,8 @@ HASH_MAX_SKIP_SECONDS = 15 * 60
 # Status ping config — even when Opus is holding quietly, we want to
 # see the position state on Telegram regularly. Per-campaign cadence,
 # independent of whether Opus was called or the hash gate fired.
-STATUS_PING_INTERVAL_SECONDS = 20 * 60  # 20 min between status pings per campaign
+# 10 min — user reported 20 min felt too rare for active monitoring.
+STATUS_PING_INTERVAL_SECONDS = 10 * 60  # 10 min between status pings per campaign
 REDIS_KEY_STATUS_PING_PREFIX = "heartbeat:status_ping:"  # + campaign_id
 
 # Guardrails

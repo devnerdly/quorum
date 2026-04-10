@@ -204,12 +204,10 @@ _POSITION_EVENT_TITLES = {
     "heartbeat_status":      ("\U0001fac0", "Heartbeat Status"),             # anatomical heart
     # Scalp brain — ultimate scalper verdict transitions
     "scalp_brain_alert":     ("\u26a1",     "Scalp Brain"),                  # lightning
-    # Thesis lifecycle — ONLY thesis_triggered renders on Telegram.
-    # thesis_created and thesis_resolved are intentionally absent from
-    # this map so format_position_event drops them at the top guard —
-    # they would otherwise be noisy (3+ proposals per heartbeat tick).
-    # Both states are still visible in the dashboard Theses tab.
-    "thesis_triggered":      ("\U0001f514", "Thesis triggered"),             # bell
+    # Thesis lifecycle — ALL thesis events silenced on Telegram.
+    # Theses are for learning data only (dashboard Theses tab). The user
+    # explicitly said they make noise and spam the feed.
+    # thesis_created, thesis_triggered, thesis_resolved — all absent.
 }
 
 
@@ -723,11 +721,9 @@ def format_position_event(evt: dict) -> str | None:
         return _format_heartbeat_status(evt)
     if kind == "scalp_brain_alert":
         return _format_scalp_brain_alert(evt)
-    if kind == "thesis_triggered":
-        return _format_thesis_triggered(evt)
-    # thesis_created and thesis_resolved are intentionally dropped at the
-    # _POSITION_EVENT_TITLES guard above so they don't spam Telegram.
-    # The dashboard Theses tab still surfaces them.
+    # ALL thesis events (created, triggered, resolved) are intentionally
+    # dropped at the _POSITION_EVENT_TITLES guard above — they're for
+    # learning data only (dashboard Theses tab). No Telegram noise.
 
     icon, title = _POSITION_EVENT_TITLES[kind]
     title = f"{_test_prefix(evt)}{title}"
