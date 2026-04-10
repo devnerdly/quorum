@@ -606,25 +606,26 @@ def _gate_htf_wall(side: str, current_price: float) -> tuple[bool, str, dict]:
 
 
 def _gate_heartbeat_conflict(side: str) -> tuple[bool, str, dict]:
-    """Warn if a suggested scalp would fight an open heartbeat-managed campaign.
+    """Check if the scalper already has an open campaign in the opposite direction.
 
-    This does NOT actually block the verdict — it just downgrades to LEAN
-    with a warning, since the scalp is a short-term view and the campaign
-    might be longer-term.
+    IMPORTANT: only checks SCALPER campaigns, not main trader campaigns.
+    The scalper is a completely independent persona — it should never be
+    blocked by the main trader's positions. They can trade opposite
+    directions simultaneously and that's by design.
     """
     with SessionLocal() as session:
         camps = (
             session.query(Campaign)
-            .filter(Campaign.status == "open")
+            .filter(Campaign.status == "open", Campaign.persona == "scalper")
             .all()
         )
         open_sides = [c.side for c in camps]
 
     if not open_sides:
-        return True, "no open campaigns", {"open_campaigns": 0}
+        return True, "no open scalper campaigns", {"open_campaigns": 0}
     if side in open_sides:
-        return True, f"aligned with open {side} campaign", {"open_sides": open_sides}
-    return False, f"would hedge open {open_sides[0]} campaign", {"open_sides": open_sides}
+        return True, f"aligned with open scalper {side}", {"open_sides": open_sides}
+    return False, f"scalper already has open {open_sides[0]}", {"open_sides": open_sides}
 
 
 # ---------------------------------------------------------------------------
