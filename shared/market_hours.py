@@ -26,8 +26,12 @@ from datetime import datetime, timezone
 # Friday close at 22:00 UTC, Sunday open at 22:00 UTC (conservative)
 # Mon-Thu: always open (24h sessions with a brief 17:00-17:01 CT daily halt
 # that we don't bother modeling — the 5-min staleness check covers it)
-WEEKEND_CLOSE_HOUR_UTC = 22  # Friday 22:00 UTC
-WEEKEND_OPEN_HOUR_UTC = 22   # Sunday 22:00 UTC
+# Close early at 21:00 UTC on Friday (one hour before CME halt) because:
+# 1. Twelve Data feed often stops updating before the official close
+# 2. Last-hour liquidity is thin, spreads widen, signals degrade
+# 3. No point running Opus on dying volume
+WEEKEND_CLOSE_HOUR_UTC = 21  # Friday 21:00 UTC (11pm Poland, 4pm CT)
+WEEKEND_OPEN_HOUR_UTC = 22   # Sunday 22:00 UTC (midnight Poland)
 
 
 def is_market_open() -> bool:
