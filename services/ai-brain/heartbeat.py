@@ -43,6 +43,7 @@ from shared.models.signals import AnalysisScore
 from shared.models.knowledge import KnowledgeSummary
 from shared.account_manager import recompute_account_state
 from shared.position_manager import (
+    check_tp_sl_hits,
     close_campaign,
     compute_campaign_state,
     get_current_price,
@@ -1388,6 +1389,37 @@ def run_tick() -> dict:
         return {"status": "locked", "ran_at": ran_at.isoformat()}
 
     try:
+        # --- SAFETY-CRITICAL: TP/SL check on EVERY tick ---
+        # This MUST run before anything else, including the hash gate
+        # and context building. The previous design relied on score events
+        # to trigger check_tp_sl_hits(), but score events can be 10+ min
+        # apart — long enough for price to blow right through an SL
+        # without firing. The heartbeat's 5-min (or 30s hot) cadence is
+        # the most frequent loop in the system, so TP/SL checks here
+        # catch what score events might miss.
+        try:
+            tp_sl_closed = check_tp_sl_hits()
+            for snap in tp_sl_closed:
+                kind = "campaign_tp" if snap.get("status") == "closed_tp" else "campaign_hard_stop" if snap.get("status") == "closed_hard_stop" else "sl_hit"
+                _publish_heartbeat_action(
+                    snap.get("campaign_id") or snap.get("id"),
+                    "close",
+                    f"TP/SL hit detected by heartbeat tick: {snap.get('status')}",
+                    extra={"side": snap.get("side"), "realized_pnl": snap.get("realized_pnl")},
+                )
+                logger.warning(
+                    "Heartbeat TP/SL check closed campaign: %s",
+                    snap.get("status"),
+                )
+        except Exception:
+            logger.exception("Heartbeat TP/SL check failed")
+
+        # Re-check open ids — the TP/SL check might have closed some
+        open_ids = _get_open_campaign_ids()
+        if not open_ids:
+            logger.info("Heartbeat: all campaigns closed by TP/SL check")
+            return {"status": "tp_sl_closed_all", "ran_at": ran_at.isoformat()}
+
         context = _build_context(open_ids)
         if not context.get("open_campaigns"):
             logger.info("Heartbeat: context has no open campaigns after build, skipping")
@@ -1397,12 +1429,9 @@ def run_tick() -> dict:
         # Skip the expensive Opus call entirely when nothing materially
         # changed since the last decision. The hash buckets price/pnl/
         # score so trivial drift doesn't invalidate the cache, and has
-        # a 30-min hard ceiling so slow-creeping state is still caught.
-        #
-        # The -50% hard-stop (check_tp_sl_hits) runs INDEPENDENTLY on
-        # every score event in ai-brain/main.py, so skipping Opus here
-        # cannot degrade risk management — it just avoids re-asking the
-        # same question and getting the same answer for $0.30 a pop.
+        # a 15-min hard ceiling so slow-creeping state is still caught.
+        # The TP/SL check above already ran unconditionally, so skipping
+        # Opus here cannot miss a stop-loss event.
         decision_hash = _compute_decision_signal(context)
         skip, skip_detail = _should_skip_opus(decision_hash)
         if skip:
