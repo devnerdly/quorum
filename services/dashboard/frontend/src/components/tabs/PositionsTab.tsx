@@ -31,8 +31,8 @@ interface AccountState {
   leverage: number;
 }
 
-const fmt = (n: number, d = 0) =>
-  n.toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+const fmt = (n: number | null | undefined, d = 0) =>
+  (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
 
 const PersonaAccountStrip: React.FC<{
   title: string;
