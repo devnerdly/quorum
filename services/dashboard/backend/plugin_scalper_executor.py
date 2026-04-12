@@ -107,15 +107,22 @@ def maybe_execute(scalp_brain_result: dict) -> dict | None:
         should_close = False
         close_reason = ""
 
-        if verdict in ("WAIT", "LEAN_LONG", "LEAN_SHORT"):
+        # Only close when the verdict CONTRADICTS the open side or goes fully neutral.
+        # LEAN in the same direction = HOLD (the signal is weakening but not gone).
+        # This prevents the scalper from closing on every tiny signal fluctuation
+        # — campaign #13 was closed 12 seconds after opening because the verdict
+        # oscillated from SHORT NOW → LEAN_SHORT. That's not a reversal, just noise.
+        if verdict == "WAIT":
             should_close = True
-            close_reason = f"scalp verdict flipped to {verdict} (was {camp_side})"
-        elif verdict == "LONG" and camp_side == "SHORT":
+            close_reason = f"scalp verdict dropped to WAIT (no conviction) — was {camp_side}"
+        elif camp_side == "LONG" and verdict in ("SHORT", "LEAN_SHORT"):
             should_close = True
-            close_reason = f"scalp verdict reversed: now LONG, was SHORT"
-        elif verdict == "SHORT" and camp_side == "LONG":
+            close_reason = f"scalp verdict flipped bearish ({verdict}) — was LONG"
+        elif camp_side == "SHORT" and verdict in ("LONG", "LEAN_LONG"):
             should_close = True
-            close_reason = f"scalp verdict reversed: now SHORT, was LONG"
+            close_reason = f"scalp verdict flipped bullish ({verdict}) — was SHORT"
+        # LEAN in same direction (LEAN_LONG when LONG, LEAN_SHORT when SHORT) = HOLD
+        # NOW in same direction = also HOLD (still aligned)
 
         if should_close:
             snap = close_campaign(
