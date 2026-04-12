@@ -47,11 +47,11 @@ const PersonaAccountStrip: React.FC<{
     );
   }
 
-  const dd = data.account_drawdown_pct;
+  const dd = data.account_drawdown_pct ?? 0;
   const ddColor =
     dd <= -30 ? "text-red-400" : dd <= -15 ? "text-amber-400" : dd >= 5 ? "text-emerald-300" : "text-gray-300";
-  const pnlColor = data.unrealised_pnl >= 0 ? "text-emerald-300" : "text-red-300";
-  const realColor = data.realized_pnl_total >= 0 ? "text-emerald-300" : "text-red-300";
+  const pnlColor = (data.unrealised_pnl ?? 0) >= 0 ? "text-emerald-300" : "text-red-300";
+  const realColor = (data.realized_pnl_total ?? 0) >= 0 ? "text-emerald-300" : "text-red-300";
 
   return (
     <div className={`${accentBg} border border-gray-800 rounded-xl p-4`}>
@@ -150,7 +150,7 @@ const PositionsTab: React.FC = () => {
               : mainAccount.account_drawdown_pct >= 5 ? "text-emerald-300"
               : "text-gray-300"
             }`}>
-              {mainAccount.account_drawdown_pct >= 0 ? "+" : ""}{mainAccount.account_drawdown_pct.toFixed(1)}%
+              {(mainAccount.account_drawdown_pct ?? 0) >= 0 ? "+" : ""}{(mainAccount.account_drawdown_pct ?? 0).toFixed(1)}%
             </div>
           </div>
           <div className="bg-gray-900 px-3 py-2 text-center">
@@ -161,7 +161,7 @@ const PositionsTab: React.FC = () => {
               : scalperAccount.account_drawdown_pct >= 5 ? "text-emerald-300"
               : "text-gray-300"
             }`}>
-              {scalperAccount.account_drawdown_pct >= 0 ? "+" : ""}{scalperAccount.account_drawdown_pct.toFixed(1)}%
+              {(scalperAccount.account_drawdown_pct ?? 0) >= 0 ? "+" : ""}{(scalperAccount.account_drawdown_pct ?? 0).toFixed(1)}%
             </div>
           </div>
         </div>

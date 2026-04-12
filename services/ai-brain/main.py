@@ -740,6 +740,12 @@ def main() -> None:
     threading.Thread(target=_daily_summary, daemon=True, name="daily-summary").start()
     logger.info("Daily summary worker thread started")
 
+    # Pre-market prep — fires Sunday 21:00 UTC (1h before open) with position
+    # risk analysis, weekend news summary, and hot window arming
+    from pre_market import run_pre_market_loop as _pre_market
+    threading.Thread(target=_pre_market, daemon=True, name="pre-market").start()
+    logger.info("Pre-market worker thread started")
+
     # Scalper background poller — hits /api/scalp-brain every 30s so the
     # scalper executor fires even when the dashboard tab is backgrounded
     # or nobody is viewing it. Without this, the scalper goes blind when
