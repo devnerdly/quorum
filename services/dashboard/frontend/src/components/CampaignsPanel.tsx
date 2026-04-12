@@ -227,7 +227,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
                 : "bg-yellow-900/40 border-yellow-800 text-yellow-300"
             }`}
           >
-            {c.size_multiplier.toFixed(2)}× size
+            {(c.size_multiplier ?? 1).toFixed(2)}× size
           </span>
         )}
 
@@ -251,8 +251,8 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
         >
           {signedUsd(c.unrealised_pnl)}{" "}
           <span className="text-xs font-medium opacity-80">
-            ({c.unrealised_pnl_pct >= 0 ? "+" : ""}
-            {c.unrealised_pnl_pct.toFixed(2)}%)
+            ({(c.unrealised_pnl_pct ?? 0) >= 0 ? "+" : ""}
+            {(c.unrealised_pnl_pct ?? 0).toFixed(2)}%)
           </span>
         </span>
 
@@ -319,7 +319,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
                 Total Lots
               </span>
               <div className="text-sm font-semibold text-gray-200 mt-0.5">
-                {c.total_lots.toFixed(2)}
+                {(c.total_lots ?? 0).toFixed(2)}
               </div>
             </div>
             <div className="bg-gray-800/60 rounded-lg p-2">
@@ -350,8 +350,8 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
 
           {/* Max loss bar */}
           <MaxLossBar
-            pnlPct={c.unrealised_pnl_pct}
-            maxLossPct={c.max_loss_pct}
+            pnlPct={c.unrealised_pnl_pct ?? 0}
+            maxLossPct={c.max_loss_pct ?? 50}
           />
 
           {/* Next DCA Preview — simulated outcomes at several price levels */}
@@ -402,10 +402,10 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
                             </span>
                           </td>
                           <td className="py-1 pr-3 text-right text-gray-400">
-                            {row.added_lots.toFixed(3)}
+                            {(row.added_lots ?? 0).toFixed(3)}
                           </td>
                           <td className="py-1 pr-3 text-right text-gray-200 font-medium">
-                            {row.new_total_lots.toFixed(3)}
+                            {(row.new_total_lots ?? 0).toFixed(3)}
                           </td>
                           <td className="py-1 pr-3 text-right text-gray-100 font-semibold">
                             {fmtPrice(row.new_avg_entry)}
@@ -438,7 +438,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
                   Dynamic Sizing
                 </span>
                 <span className="text-[10px] text-gray-600">
-                  {c.size_multiplier.toFixed(2)}× (base {c.sizing_info.base?.toFixed(2)}×)
+                  {(c.size_multiplier ?? 1).toFixed(2)}× (base {(c.sizing_info?.base ?? 1).toFixed(2)}×)
                 </span>
               </div>
               <div className="bg-gray-800/40 rounded p-2 space-y-1">
@@ -493,7 +493,7 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
                             {fmtPrice(pos.entry_price)}
                           </td>
                           <td className="py-1.5 pr-3 text-right text-gray-300">
-                            {pos.lots.toFixed(2)}
+                            {(pos.lots ?? 0).toFixed(2)}
                           </td>
                           <td className="py-1.5 pr-3 text-right text-gray-300">
                             {fmtUsd(pos.margin_used)}
