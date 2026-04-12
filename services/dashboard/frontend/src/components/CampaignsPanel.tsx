@@ -444,11 +444,11 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
               <div className="bg-gray-800/40 rounded p-2 space-y-1">
                 <div className="text-[10px] text-gray-400">Why this size:</div>
                 <ul className="text-[10px] text-gray-300 space-y-0.5">
-                  {c.sizing_info.reasons?.map((r, i) => (
+                  {c.sizing_info?.reasons?.map((r, i) => (
                     <li key={i}>• {r}</li>
                   ))}
                 </ul>
-                {c.sizing_info.state && (
+                {c.sizing_info?.state && (
                   <div className="text-[9px] text-gray-600 pt-1 border-t border-gray-800/70 mt-1">
                     inputs:{" "}
                     {Object.entries(c.sizing_info.state)
