@@ -92,7 +92,7 @@ const SignalHistory: React.FC<SignalHistoryProps> = ({ signals, onSignalClick })
               </td>
               <td className="py-2 pr-3 text-gray-300">
                 {s.confidence != null
-                  ? `${(s.confidence * 100).toFixed(0)}%`
+                  ? `${((s.confidence ?? 0) * 100).toFixed(0)}%`
                   : "—"}
               </td>
               <td className="py-2 pr-3 text-gray-300">

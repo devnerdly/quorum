@@ -58,11 +58,11 @@ interface CrossResponse {
 }
 
 const SYMBOL_META: Record<string, { label: string; hint: string; fmt: (n: number) => string }> = {
-  DXY:  { label: "DXY",  hint: "US Dollar Index · inverse corr oil", fmt: (n) => n.toFixed(3) },
-  SPX:  { label: "SPX",  hint: "S&P 500 · risk-on/off proxy",        fmt: (n) => n.toFixed(0) },
-  GOLD: { label: "Gold", hint: "GC=F · safe haven",                  fmt: (n) => n.toFixed(2) },
-  BTC:  { label: "BTC",  hint: "Bitcoin · crypto risk sentiment",    fmt: (n) => n.toFixed(0) },
-  VIX:  { label: "VIX",  hint: "Volatility index · fear gauge",      fmt: (n) => n.toFixed(2) },
+  DXY:  { label: "DXY",  hint: "US Dollar Index · inverse corr oil", fmt: (n) => (n ?? 0).toFixed(3) },
+  SPX:  { label: "SPX",  hint: "S&P 500 · risk-on/off proxy",        fmt: (n) => (n ?? 0).toFixed(0) },
+  GOLD: { label: "Gold", hint: "GC=F · safe haven",                  fmt: (n) => (n ?? 0).toFixed(2) },
+  BTC:  { label: "BTC",  hint: "Bitcoin · crypto risk sentiment",    fmt: (n) => (n ?? 0).toFixed(0) },
+  VIX:  { label: "VIX",  hint: "Volatility index · fear gauge",      fmt: (n) => (n ?? 0).toFixed(2) },
 };
 
 const CrossAssetsCard: React.FC = () => {
