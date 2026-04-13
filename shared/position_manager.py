@@ -36,7 +36,11 @@ logger = logging.getLogger(__name__)
 PRICE_SOURCE: str = "twelve"  # single canonical price source (Twelve Data WTI/USD)
 
 
-MAX_PRICE_STALENESS_SECONDS = 5 * 60  # refuse to trade on data older than 5 min
+# Twelve Data REST (Grow plan) can lag 5-10 minutes behind real-time.
+# The live ticker (/quote endpoint) is faster but OHLCV bars arrive
+# with a delay. 15 minutes is the safe threshold — anything older than
+# that means the collector is actually broken, not just delayed.
+MAX_PRICE_STALENESS_SECONDS = 15 * 60  # refuse to trade on data older than 15 min
 
 
 def get_current_price() -> float | None:
