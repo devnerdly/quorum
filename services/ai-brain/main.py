@@ -404,37 +404,58 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
     should_dca = False
     reason = ""
 
-    # Check drawdown trigger
-    if avg_entry and avg_entry > 0:
-        if camp_side == "LONG":
-            drawdown_pct = ((avg_entry - current_price) / avg_entry) * 100
-        else:
-            drawdown_pct = ((current_price - avg_entry) / avg_entry) * 100
-
-        if drawdown_pct >= DCA_DRAWDOWN_TRIGGER_PCT:
-            should_dca = True
-            reason = f"drawdown {drawdown_pct:.2f}% >= {DCA_DRAWDOWN_TRIGGER_PCT}%"
-
-    # Or strong fresh signal
-    if not should_dca and conf >= 0.75:
-        # Check last DCA layer timing — find latest position in campaign
-        from shared.models.base import SessionLocal
-        from shared.models.positions import Position as _Position
-        with SessionLocal() as session:
-            latest_pos = (
-                session.query(_Position)
-                .filter(
-                    _Position.campaign_id == camp["id"],
-                    _Position.status == "open",
-                )
-                .order_by(_Position.opened_at.desc())
-                .first()
+    # Find the age of the last layer for cooldown checks
+    from shared.models.base import SessionLocal
+    from shared.models.positions import Position as _Position
+    last_layer_age_min = None
+    with SessionLocal() as session:
+        latest_pos = (
+            session.query(_Position)
+            .filter(
+                _Position.campaign_id == camp["id"],
+                _Position.status == "open",
             )
-            if latest_pos and latest_pos.opened_at:
-                age = datetime.now(tz=timezone.utc) - latest_pos.opened_at
-                if age >= timedelta(minutes=30):
-                    should_dca = True
-                    reason = f"strong signal conf={conf:.2f}, last layer {age.seconds//60}m ago"
+            .order_by(_Position.opened_at.desc())
+            .first()
+        )
+        if latest_pos and latest_pos.opened_at:
+            last_layer_age_min = (datetime.now(tz=timezone.utc) - latest_pos.opened_at).total_seconds() / 60
+
+    # Minimum cooldown between DCA layers (prevents stacking on every tick)
+    DCA_COOLDOWN_MINUTES = 15
+
+    if last_layer_age_min is not None and last_layer_age_min < DCA_COOLDOWN_MINUTES:
+        logger.info(
+            "Campaign #%s: DCA cooldown active (last layer %.0f min ago, need %d min)",
+            camp["id"], last_layer_age_min, DCA_COOLDOWN_MINUTES,
+        )
+    else:
+        # --- TRIGGER 1: Drawdown-based DCA ---
+        # Price moved against us by DCA_DRAWDOWN_TRIGGER_PCT (1.5%)
+        if avg_entry and avg_entry > 0:
+            if camp_side == "LONG":
+                drawdown_pct = ((avg_entry - current_price) / avg_entry) * 100
+            else:
+                drawdown_pct = ((current_price - avg_entry) / avg_entry) * 100
+
+            if drawdown_pct >= DCA_DRAWDOWN_TRIGGER_PCT:
+                should_dca = True
+                reason = f"drawdown {drawdown_pct:.2f}% >= {DCA_DRAWDOWN_TRIGGER_PCT}%"
+
+        # --- TRIGGER 2: Conviction-based DCA ---
+        # Same-side signal with decent confidence (conf ≥ 0.60)
+        if not should_dca and conf >= 0.60:
+            should_dca = True
+            reason = f"conviction DCA: same-side signal conf={conf:.2f}"
+
+        # --- TRIGGER 3: Time-based DCA ---
+        # If we've been holding for 30+ min with only 1-2 layers and thesis
+        # is intact (same-side signal), auto-add to build the position.
+        # The bot enters tiny Layer-0 ($300) and should scale up gradually.
+        if not should_dca and layers_used <= 3 and last_layer_age_min is not None:
+            if last_layer_age_min >= 30:
+                should_dca = True
+                reason = f"time-based DCA: {last_layer_age_min:.0f} min since last layer, only {layers_used} layers"
 
     if should_dca:
         new_pos_id = add_dca_layer(camp["id"], current_price)

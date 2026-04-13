@@ -83,7 +83,11 @@ MAX_SIZE_MULTIPLIER = 3.0
 MAX_TOTAL_EXPOSURE_PCT = 0.80
 
 # Drawdown threshold (% of avg entry) that triggers the next DCA layer.
-DCA_DRAWDOWN_TRIGGER_PCT = 5.0
+# Lowered from 5% to 1.5% — WTI moves 1-3%/day so 5% was too wide
+# and the bot was sitting on tiny Layer-0 positions for hours without
+# ever scaling in. 1.5% means a $1.50 move against you on a $100 entry
+# triggers the next layer, which is reasonable for intraday DCA.
+DCA_DRAWDOWN_TRIGGER_PCT = 1.5
 
 # Hard stop: close the campaign when its unrealised PnL drops below this % of margin.
 HARD_STOP_DRAWDOWN_PCT = 50.0
