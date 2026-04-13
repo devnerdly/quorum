@@ -479,6 +479,7 @@ def compute_campaign_state(campaign_id: int, current_price: float | None = None)
             "max_loss_pct": campaign.max_loss_pct,
             "realized_pnl": campaign.realized_pnl,
             "notes": campaign.notes,
+            "entry_snapshot": campaign.entry_snapshot,
             "positions": positions_data,
             "dca_preview": dca_preview,
         }

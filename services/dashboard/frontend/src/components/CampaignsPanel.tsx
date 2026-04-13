@@ -53,6 +53,33 @@ interface Campaign {
   max_loss_pct: number;
   positions: CampaignPosition[];
   dca_preview?: DcaPreviewRow[];
+  entry_snapshot?: {
+    price?: number;
+    reason?: string;
+    scores?: Record<string, number | null>;
+    ai_recommendation?: {
+      action?: string;
+      confidence?: number;
+      analysis_text?: string;
+      base_scenario?: string;
+      alt_scenario?: string;
+      risk_factors?: string | string[];
+      entry_price?: number;
+      stop_loss?: number;
+      take_profit?: number;
+    };
+    recent_news?: Array<{
+      ts?: string;
+      summary?: string;
+      sentiment?: string;
+      score?: number;
+    }>;
+    last_heartbeat?: {
+      decision?: string;
+      reason?: string;
+    };
+    friction_config?: Record<string, number>;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +486,100 @@ const CampaignCard: React.FC<CampaignCardProps> = ({ campaign, onRefetch }) => {
                 )}
               </div>
             </div>
+          )}
+
+          {/* Entry Reasoning — WHY this campaign was opened */}
+          {c.entry_snapshot && (
+            <details className="mb-3">
+              <summary className="text-[10px] uppercase tracking-widest text-blue-400 cursor-pointer hover:text-blue-300 mb-2">
+                📋 Entry Reasoning — why this trade was opened
+              </summary>
+              <div className="bg-blue-950/20 border border-blue-900/30 rounded-lg p-3 space-y-3 text-[11px]">
+                {/* AI Recommendation */}
+                {c.entry_snapshot.ai_recommendation && (
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-blue-400 mb-1">
+                      AI Recommendation: {c.entry_snapshot.ai_recommendation.action} ({((c.entry_snapshot.ai_recommendation.confidence ?? 0) * 100).toFixed(0)}% confidence)
+                    </div>
+                    {c.entry_snapshot.ai_recommendation.analysis_text && (
+                      <div className="text-gray-300 leading-relaxed whitespace-pre-line text-[10px]">
+                        {c.entry_snapshot.ai_recommendation.analysis_text}
+                      </div>
+                    )}
+                    {c.entry_snapshot.ai_recommendation.base_scenario && (
+                      <div className="mt-1">
+                        <span className="text-gray-500 text-[9px]">Base scenario: </span>
+                        <span className="text-gray-400 text-[10px]">{c.entry_snapshot.ai_recommendation.base_scenario}</span>
+                      </div>
+                    )}
+                    {c.entry_snapshot.ai_recommendation.alt_scenario && (
+                      <div>
+                        <span className="text-gray-500 text-[9px]">Alt scenario: </span>
+                        <span className="text-gray-400 text-[10px]">{c.entry_snapshot.ai_recommendation.alt_scenario}</span>
+                      </div>
+                    )}
+                    {c.entry_snapshot.ai_recommendation.risk_factors && (
+                      <div className="mt-1">
+                        <span className="text-gray-500 text-[9px]">Risk factors: </span>
+                        <span className="text-red-300 text-[10px]">
+                          {Array.isArray(c.entry_snapshot.ai_recommendation.risk_factors)
+                            ? c.entry_snapshot.ai_recommendation.risk_factors.join(" · ")
+                            : c.entry_snapshot.ai_recommendation.risk_factors}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Scores at entry */}
+                {c.entry_snapshot.scores && (
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(c.entry_snapshot.scores).map(([k, v]) => (
+                      <span
+                        key={k}
+                        className={`px-2 py-0.5 rounded text-[9px] font-mono ${
+                          v == null ? "bg-gray-800 text-gray-500"
+                          : (v as number) > 10 ? "bg-green-900/40 text-green-300"
+                          : (v as number) < -10 ? "bg-red-900/40 text-red-300"
+                          : "bg-gray-800 text-gray-300"
+                        }`}
+                      >
+                        {k}: {v != null ? (v as number).toFixed(1) : "—"}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* News at entry */}
+                {c.entry_snapshot.recent_news && c.entry_snapshot.recent_news.length > 0 && (
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-gray-500 mb-1">News at entry</div>
+                    {c.entry_snapshot.recent_news.map((n, i) => (
+                      <div key={i} className="text-[10px] text-gray-400 mb-1">
+                        <span className={`font-bold mr-1 ${
+                          n.sentiment === "bullish" ? "text-green-400"
+                          : n.sentiment === "bearish" ? "text-red-400"
+                          : "text-gray-500"
+                        }`}>
+                          {n.sentiment === "bullish" ? "🟢" : n.sentiment === "bearish" ? "🔴" : "⚪"}
+                        </span>
+                        {n.summary}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Entry price + friction */}
+                <div className="flex gap-4 text-[10px] text-gray-500 pt-1 border-t border-gray-800/50">
+                  {c.entry_snapshot.price != null && (
+                    <span>Entry price: <span className="text-gray-200">${(c.entry_snapshot.price ?? 0).toFixed(3)}</span></span>
+                  )}
+                  {c.entry_snapshot.friction_config && (
+                    <span>Spread: ${c.entry_snapshot.friction_config.spread_half_usd ?? 0} · Slippage max: ${c.entry_snapshot.friction_config.slippage_max_usd ?? 0}</span>
+                  )}
+                </div>
+              </div>
+            </details>
           )}
 
           {/* DCA layer table */}
