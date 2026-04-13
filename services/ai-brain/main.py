@@ -421,39 +421,41 @@ def _handle_campaign_signal(new_side: str, conf: float, rec: dict) -> None:
         if latest_pos and latest_pos.opened_at:
             last_layer_age_min = (datetime.now(tz=timezone.utc) - latest_pos.opened_at).total_seconds() / 60
 
-    # Minimum cooldown between DCA layers (prevents stacking on every tick)
-    DCA_COOLDOWN_MINUTES = 15
+    # Minimum cooldown — 2 min prevents stacking on literally every tick
+    DCA_COOLDOWN_MINUTES = 2
 
     if last_layer_age_min is not None and last_layer_age_min < DCA_COOLDOWN_MINUTES:
-        logger.info(
-            "Campaign #%s: DCA cooldown active (last layer %.0f min ago, need %d min)",
-            camp["id"], last_layer_age_min, DCA_COOLDOWN_MINUTES,
-        )
+        pass  # too soon, skip silently
     else:
-        # --- TRIGGER 1: Drawdown-based DCA ---
-        # Price moved against us by DCA_DRAWDOWN_TRIGGER_PCT (1.5%)
+        # --- TRIGGER 1: Price moved in EITHER direction ---
+        # DCA on drawdown (averaging down) AND on price moving in your
+        # favor (pyramiding / adding to winners). Both directions build
+        # the position. The 25-layer schedule is designed for gradual
+        # scaling — the bot should use it aggressively.
         if avg_entry and avg_entry > 0:
             if camp_side == "LONG":
-                drawdown_pct = ((avg_entry - current_price) / avg_entry) * 100
+                move_pct = abs(current_price - avg_entry) / avg_entry * 100
             else:
-                drawdown_pct = ((current_price - avg_entry) / avg_entry) * 100
+                move_pct = abs(avg_entry - current_price) / avg_entry * 100
 
-            if drawdown_pct >= DCA_DRAWDOWN_TRIGGER_PCT:
+            if move_pct >= DCA_DRAWDOWN_TRIGGER_PCT:
+                direction = "favorable" if (
+                    (camp_side == "LONG" and current_price > avg_entry) or
+                    (camp_side == "SHORT" and current_price < avg_entry)
+                ) else "adverse"
                 should_dca = True
-                reason = f"drawdown {drawdown_pct:.2f}% >= {DCA_DRAWDOWN_TRIGGER_PCT}%"
+                reason = f"price moved {move_pct:.2f}% ({direction}) — adding layer"
 
         # --- TRIGGER 2: Conviction-based DCA ---
-        # Same-side signal with decent confidence (conf ≥ 0.60)
+        # Same-side signal with decent confidence
         if not should_dca and conf >= 0.60:
             should_dca = True
             reason = f"conviction DCA: same-side signal conf={conf:.2f}"
 
         # --- TRIGGER 3: Time-based DCA ---
-        # If we've been holding for 30+ min with only 1-2 layers and thesis
-        # is intact (same-side signal), auto-add to build the position.
-        # The bot enters tiny Layer-0 ($300) and should scale up gradually.
-        if not should_dca and layers_used <= 3 and last_layer_age_min is not None:
-            if last_layer_age_min >= 30:
+        # Build the position gradually even in flat markets
+        if not should_dca and layers_used <= 5 and last_layer_age_min is not None:
+            if last_layer_age_min >= 15:
                 should_dca = True
                 reason = f"time-based DCA: {last_layer_age_min:.0f} min since last layer, only {layers_used} layers"
 
