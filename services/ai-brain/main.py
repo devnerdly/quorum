@@ -813,7 +813,7 @@ def main() -> None:
         logger.info("Scalper poller started (30s cadence, pauses when market closed)")
         while True:
             if not is_market_open():
-                _time.sleep(300)  # sleep 5 min when market closed
+                _time.sleep(30)  # sleep 5 min when market closed
                 continue
             try:
                 httpx.get("http://dashboard:8000/api/scalp-brain", timeout=15)
