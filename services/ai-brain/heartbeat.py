@@ -59,7 +59,11 @@ logger = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-MODEL = "claude-opus-4-6"
+# Sonnet is 5x cheaper than Opus and handles hold/DCA/update_levels
+# decisions just as well. Opus was costing $51/day on heartbeat alone.
+# Sonnet at the same volume = ~$10/day. The 13-agent committee still
+# uses Opus for the judge when you need deep reasoning.
+MODEL = "claude-sonnet-4-6"
 # 15-minute default cadence — balanced between responsiveness and token cost.
 # The hash gate skips Opus when nothing changed, and the hot window (30s)
 # activates automatically on campaign open/close for rapid monitoring.
@@ -486,13 +490,13 @@ def _get_recent_news(minutes: int = 30) -> list[dict]:
             session.query(KnowledgeSummary)
             .filter(KnowledgeSummary.timestamp >= since)
             .order_by(KnowledgeSummary.timestamp.desc())
-            .limit(5)
+            .limit(3)  # 3 not 5 — saves ~800 tokens per tick
             .all()
         )
         return [
             {
                 "ts": r.timestamp.isoformat(),
-                "summary": (r.summary or "")[:400],
+                "summary": (r.summary or "")[:200],  # 200 not 400
                 "sentiment": r.sentiment_label,
             }
             for r in rows
@@ -621,7 +625,8 @@ def _build_context(open_campaign_ids: list[int]) -> dict:
         # absorb, or ignore them, but must NEVER duplicate one already
         # in this list (the propose_theses dedupe does the mechanical
         # check but Opus should self-filter first).
-        "pending_theses": _get_pending_theses_for_context(),
+        # Limit to 5 theses to keep context small (was 20)
+        "pending_theses": _get_pending_theses_for_context(limit=5),
         # 30-day range position — tells Opus where price sits in the
         # broader range so it can factor mean-reversion risk into its
         # hold/close/update_levels decisions.

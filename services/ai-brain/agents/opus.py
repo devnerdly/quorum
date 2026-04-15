@@ -20,7 +20,11 @@ from shared.models.signals import AIRecommendation
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-opus-4-6"
+# Switched from Opus ($15/$75 per MTok) to Sonnet ($3/$15) — 5x cheaper.
+# Opus was costing $9/day just on recommendations. Sonnet handles
+# BUY/SELL/HOLD decisions fine. The 13-agent committee judge still uses
+# Opus when deep reasoning is needed (user-triggered debates only).
+MODEL = "claude-sonnet-4-6"
 
 SYSTEM_PROMPT = (
     "You are a senior oil market strategist with 20+ years of experience trading WTI crude oil. "
